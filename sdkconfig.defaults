@@ -1,0 +1,33 @@
+# Base sdkconfig defaults — applied to all boards.
+# Board-specific files in boards/<chip>/sdkconfig.defaults override these.
+
+# Flash size — must be set before partition table is evaluated
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+
+# Partition table — OTA-capable (two app partitions)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# NVS
+CONFIG_NVS_ASSERT_ERROR_CHECK=n
+
+# HTTP server
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+CONFIG_HTTPD_MAX_URI_LEN=512
+
+# OTA — allow plain HTTP firmware URLs for local/dev testing only.
+# DISABLE in production: set CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=n and add a CA
+# cert bundle (see esp_crt_bundle or CONFIG_MBEDTLS_CERTIFICATE_BUNDLE).
+CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
+
+# MQTT
+CONFIG_MQTT_PROTOCOL_311=y
+CONFIG_MQTT_TRANSPORT_SSL=y
+CONFIG_MQTT_TRANSPORT_WEBSOCKET=y
+
+# Logging
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# FreeRTOS tick rate
+CONFIG_FREERTOS_HZ=1000

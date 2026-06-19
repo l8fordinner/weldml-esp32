@@ -1,0 +1,5 @@
+## IDF Component Manager manifest
+## https://docs.espressif.com/projects/idf-component-manager/
+
+dependencies:
+  idf: ">=5.0"

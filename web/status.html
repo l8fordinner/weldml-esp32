@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Device Status — ESP32 Device</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>ESP32 Device</h1>
+  <nav>
+    <a href="/">WiFi</a>
+    <a href="/config">Config</a>
+    <a href="/ota">OTA</a>
+    <a href="/status">Status</a>
+  </nav>
+</header>
+
+<div class="card">
+  <h2>Device Info</h2>
+  <div id="info">
+    <div class="info-row"><span class="info-label">IDF version</span><span id="idf_version">—</span></div>
+    <div class="info-row"><span class="info-label">Free heap</span><span id="free_heap">—</span></div>
+    <div class="info-row"><span class="info-label">Uptime</span><span id="uptime">—</span></div>
+    <div class="info-row"><span class="info-label">WiFi SSID</span><span id="wifi_ssid">—</span></div>
+    <div class="info-row"><span class="info-label">WiFi RSSI</span><span id="wifi_rssi">—</span></div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+<script>
+async function loadStatus() {
+  try {
+    const data = await (await fetch('/api/status')).json();
+    document.getElementById('idf_version').textContent = data.idf_version || '—';
+    document.getElementById('free_heap').textContent   = data.free_heap
+      ? (data.free_heap / 1024).toFixed(1) + ' KB' : '—';
+    document.getElementById('uptime').textContent      = data.uptime_ms
+      ? Math.floor(data.uptime_ms / 1000) + ' s' : '—';
+    document.getElementById('wifi_ssid').textContent   = data.wifi_ssid || '(not connected)';
+    document.getElementById('wifi_rssi').textContent   = data.wifi_rssi !== undefined
+      ? data.wifi_rssi + ' dBm' : '—';
+  } catch (err) {
+    document.getElementById('info').textContent = 'Could not load status.';
+  }
+}
+
+loadStatus();
+setInterval(loadStatus, 5000);
+</script>
+</body>
+</html>

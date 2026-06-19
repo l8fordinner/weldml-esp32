@@ -1,0 +1,42 @@
+# Project Configuration
+
+This file defines the specifics of this project as forked from esp32-base-template.
+Fill this in completely before invoking Claude Code.
+Claude Code reads this file along with REQUIREMENTS.md and all docs in docs/.
+
+---
+
+## Project Name
+<!-- e.g. "Temperature Monitor Node" -->
+
+## Chip Target
+<!-- One of: ESP32 / ESP32-S3 / ESP32-C3 / ESP32-H2 / ESP32-C6 -->
+
+## Board
+<!-- Describe the board. Is it a known dev board or custom PCB?
+     If custom, the schematic should be in docs/. -->
+
+## Optional Components
+- BLE provisioning: <!-- yes / no -->
+- Zigbee: <!-- yes / no — only valid on H2 or C6 -->
+
+## MQTT
+- Broker: <!-- hostname or IP, or "not yet defined" -->
+- Topic prefix: <!-- e.g. "devices/{device_id}/" or "not yet defined" -->
+- Notes: <!-- any backend-specific context -->
+
+## OTA
+- Firmware URL: <!-- base URL for OTA updates, or "not yet defined" -->
+- Notes: <!-- any OTA-specific context -->
+
+## Web UI
+<!-- List any pages or interactions this project needs beyond the base template.
+     Base template already includes: provisioning, config, OTA trigger, status. -->
+
+## Hardware Notes
+<!-- Describe any peripherals, sensors, or other hardware relevant to this project.
+     Add datasheets and schematics to docs/ and reference them here. -->
+<!-- Example: "1.47" SPI TFT display (ST7789V3) on SPI2. See docs/display_datasheet.pdf" -->
+
+## Other Notes
+<!-- Anything else Claude Code should know before starting work -->

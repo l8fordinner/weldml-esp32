@@ -1,0 +1,27 @@
+# Board: Adafruit Feather HUZZAH32
+# Chip:  ESP32-WROOM-32 (ESP32 rev 1)
+# Flash: 4 MB
+# PSRAM: None
+# USB:   CP2104 USB-to-serial (no native USB)
+# Notes: - LED on GPIO 13 (red, active high)
+#          An onboard blue LED also exists on some revisions at GPIO 13.
+#        - VBAT sense on A13 / GPIO 35 (ADC1_CH7) — 1/2 divider
+#        - No built-in BOOT button labelled as such; GPIO 0 is connected
+#          to the low-side of the RST button on some revisions.
+
+# Inherit generic ESP32 chip defaults
+CONFIG_BOARD_DUAL_CORE=y
+CONFIG_BOARD_HAS_BT_CLASSIC=y
+CONFIG_BOARD_HAS_BLE=y
+CONFIG_BOARD_HAS_WIFI=y
+CONFIG_BOARD_HAS_NATIVE_USB=n
+CONFIG_BOARD_HAS_ZIGBEE=n
+
+# Flash config for CP2104 + WROOM-32
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_BAUD_921600=y
+
+# No PSRAM on standard HUZZAH32
+CONFIG_ESP32_SPIRAM_SUPPORT=n

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WiFi Setup — ESP32 Device</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>ESP32 Device</h1>
+  <nav>
+    <a href="/">WiFi</a>
+    <a href="/config">Config</a>
+    <a href="/ota">OTA</a>
+    <a href="/status">Status</a>
+  </nav>
+</header>
+
+<div class="card">
+  <h2>WiFi Setup</h2>
+  <form id="wifi-form">
+    <label for="ssid">Network Name (SSID)</label>
+    <input type="text" id="ssid" name="ssid" placeholder="MyNetwork" autocomplete="off" required>
+
+    <label for="password">Password</label>
+    <input type="password" id="password" name="password" placeholder="••••••••" autocomplete="current-password">
+
+    <button type="submit">Save &amp; Connect</button>
+  </form>
+  <p id="status-msg"></p>
+</div>
+
+<script src="/app.js"></script>
+<script>
+document.getElementById('wifi-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  showStatus('Saving…', '');
+  try {
+    const res = await postJSON('/api/wifi', {
+      ssid:     document.getElementById('ssid').value,
+      password: document.getElementById('password').value,
+    });
+    showStatus(res.message || (res.ok ? 'Saved.' : 'Error.'), res.ok ? 'ok' : 'error');
+  } catch (err) {
+    showStatus('Request failed: ' + err.message, 'error');
+  }
+});
+</script>
+</body>
+</html>

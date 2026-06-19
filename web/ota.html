@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OTA Update — ESP32 Device</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>ESP32 Device</h1>
+  <nav>
+    <a href="/">WiFi</a>
+    <a href="/config">Config</a>
+    <a href="/ota">OTA</a>
+    <a href="/status">Status</a>
+  </nav>
+</header>
+
+<div class="card">
+  <h2>Firmware Update (OTA)</h2>
+  <p style="margin-bottom:1rem; font-size:0.9rem; color:var(--muted);">
+    Triggers a firmware pull from the configured HTTPS URL.
+    The device will reboot automatically after a successful update.
+  </p>
+  <button id="ota-btn">Start OTA Update</button>
+  <p id="status-msg"></p>
+</div>
+
+<script src="/app.js"></script>
+<script>
+let polling = false;
+
+document.getElementById('ota-btn').addEventListener('click', async () => {
+  document.getElementById('ota-btn').disabled = true;
+  showStatus('Starting OTA…', '');
+  try {
+    const res = await postJSON('/api/ota', {});
+    if (res.ok) {
+      showStatus('OTA in progress — device will reboot on success.', 'ok');
+      startPolling();
+    } else {
+      showStatus('Failed to start OTA.', 'error');
+      document.getElementById('ota-btn').disabled = false;
+    }
+  } catch (err) {
+    showStatus('Request failed: ' + err.message, 'error');
+    document.getElementById('ota-btn').disabled = false;
+  }
+});
+
+function startPolling() {
+  if (polling) return;
+  polling = true;
+  const iv = setInterval(async () => {
+    try {
+      const res = await fetch('/api/status');
+      const data = await res.json();
+      if (data.ota_status === 'success') {
+        clearInterval(iv);
+        showStatus('Update successful — device rebooting.', 'ok');
+      } else if (data.ota_status === 'failed') {
+        clearInterval(iv);
+        showStatus('OTA failed. Check the firmware URL and try again.', 'error');
+        document.getElementById('ota-btn').disabled = false;
+      }
+    } catch (_) { /* device may be rebooting */ }
+  }, 2000);
+}
+</script>
+</body>
+</html>

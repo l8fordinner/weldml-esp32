@@ -1,0 +1,68 @@
+menu "ESP32 Base Template Config"
+
+    config WIFI_SSID
+        string "WiFi SSID"
+        default ""
+        help
+            Default WiFi SSID. Can be overridden at runtime via web UI / NVS.
+
+    config WIFI_PASSWORD
+        string "WiFi Password"
+        default ""
+        help
+            Default WiFi password. Can be overridden at runtime via web UI / NVS.
+
+    config MQTT_BROKER_URL
+        string "MQTT Broker URL"
+        default "mqtt://broker.example.com"
+        help
+            Default MQTT broker URL. Can be overridden at runtime via web UI / NVS.
+
+    config MQTT_BROKER_PORT
+        int "MQTT Broker Port"
+        default 1883
+        help
+            Default MQTT broker port.
+
+    config OTA_FIRMWARE_URL
+        string "OTA Firmware URL"
+        default "https://example.com/firmware.bin"
+        help
+            HTTPS URL for OTA firmware updates.
+
+    config WEBSERVER_PORT
+        int "Web Server Port"
+        default 80
+        help
+            TCP port for the built-in web server.
+
+    config WIFI_AP_SSID
+        string "Setup AP SSID"
+        default "ESP32-Setup"
+        help
+            SSID of the SoftAP broadcast when no WiFi credentials are configured.
+            Connect your phone to this network to reach the setup UI at 192.168.4.1.
+
+    config WIFI_AP_PASSWORD
+        string "Setup AP Password"
+        default ""
+        help
+            Password for the setup AP. Leave empty for an open network (easier
+            for first-run setup). Set a password if the deployment environment
+            requires it.
+
+    config WIFI_AP_CHANNEL
+        int "Setup AP Channel"
+        default 1
+        range 1 13
+        help
+            WiFi channel for the setup AP.
+
+    config WIFI_AP_MAX_CONN
+        int "Setup AP Max Connections"
+        default 4
+        range 1 10
+        help
+            Maximum simultaneous clients on the setup AP.
+
+endmenu

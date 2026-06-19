@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Device Config — ESP32 Device</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>ESP32 Device</h1>
+  <nav>
+    <a href="/">WiFi</a>
+    <a href="/config">Config</a>
+    <a href="/ota">OTA</a>
+    <a href="/status">Status</a>
+  </nav>
+</header>
+
+<div class="card">
+  <h2>Device Configuration</h2>
+  <form id="config-form">
+    <label for="mqtt_url">MQTT Broker URL</label>
+    <input type="url" id="mqtt_url" name="mqtt_url"
+           placeholder="mqtt://broker.example.com:1883">
+
+    <label for="ota_url">OTA Firmware URL</label>
+    <input type="url" id="ota_url" name="ota_url"
+           placeholder="http://server.example.com/firmware.bin">
+
+    <button type="submit">Save</button>
+  </form>
+  <p id="status-msg"></p>
+</div>
+
+<script src="/app.js"></script>
+<script>
+document.getElementById('config-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  showStatus('Saving…', '');
+  try {
+    const res = await postJSON('/api/config', {
+      mqtt_url: document.getElementById('mqtt_url').value,
+      ota_url:  document.getElementById('ota_url').value,
+    });
+    showStatus(res.ok ? 'Saved.' : 'Error saving config.', res.ok ? 'ok' : 'error');
+  } catch (err) {
+    showStatus('Request failed: ' + err.message, 'error');
+  }
+});
+</script>
+</body>
+</html>
