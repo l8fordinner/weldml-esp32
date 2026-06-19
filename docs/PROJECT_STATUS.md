@@ -9,7 +9,7 @@ Update this at the end of each working session and commit it with the session's 
 
 **Phase:** Stage 2 complete. `boards/waveshare-esp32-s3-lcd-147/` board config added.
 16MB flash + Octal PSRAM enabled. Build verified (1023/1023). No WeldML firmware code yet.
-Q1/Q2 still open — firmware components blocked until architecture decision.
+Next: Stage 3 — screen color test (LCD only, no USB/SD dependency).
 
 **Branch:** `main`
 **Last committed:** `907570d`
@@ -233,8 +233,18 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 
 ## What Is Next
 
-1. **Resolve Q1** — architecture decision (port SmrtUsbEsp USB MSC + SD + LED code into weldml-esp32 as new components is current candidate; confirm to unlock Stage 3+).
-2. **Stage 3** — Add TinyUSB MSC + CDC components (blocks on Q1/Q2).
+1. **Stage 3 — Screen color test.**
+   Replace the WiFi template `main.c` with a minimal WeldML stub that shows white→green on the LCD.
+   Add `components/lcd_st7789/` using `esp_lcd` + `esp_lcd_new_panel_st7789()`. Remove SPIFFS.
+   Add board-specific `partitions.csv` (single factory, no OTA/SPIFFS for now).
+   _Rationale: self-contained, no USB/SD complexity, validates LCD hardware and SPI bus before
+   layering on TinyUSB. Failure here is cheap to diagnose. Q1/Q2 answers not required._
+
+2. **Stage 4 — USB MSC + SD SPI.**
+   Port TinyUSB MSC + CDC + SD SPI from SmrtUsbEsp as new components.
+   Q1 plan answer (locked in staged plan): gut `main.c`; port as new components; no fork.
+   Q1/Q2 should be formally closed in OPEN_QUESTIONS.md before coding Stage 4.
+
 3. **Add `workbench.local` to WSL `/etc/hosts`** — requires sudo; `echo "192.168.1.43 workbench.local" | sudo tee -a /etc/hosts`.
 
 ---
