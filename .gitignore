@@ -2,6 +2,7 @@
 CLAUDE.md
 .claude/settings.json
 .claude/*.local.md
+SESSION_HANDOFF.md
 
 # ESP-IDF build output
 build/

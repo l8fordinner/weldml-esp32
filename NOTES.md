@@ -56,13 +56,24 @@ Board MAC: `98:3d:ae:e4:4e:ac`
 | Waveshare assigned to SLOT3 | CONFIRMED | `/api/devices`: state=idle, devnode=/dev/ttyACM0, url=rfc2217://192.168.1.43:4003 |
 | OpenOCD auto-started (SLOT3) | CONFIRMED | debugging=true, debug_chip=esp32s3, gdb_port=3335, telnet=4446 |
 | Build for esp32s3 target | PASS | `idf.py build` — 1028/1028 targets, zero errors, zero warnings |
-| Flash | NOT RUN | Awaiting explicit approval; all technical blockers cleared |
+| Flash (template firmware) | PASS — binary verified | `idf.py -p rfc2217://192.168.1.43:4003 flash` from WSL; SHA hash verified all 5 binaries; esptool v4.11.0; 2026-06-19 |
+| Boot log capture via RFC2217 | BLOCKED | RFC2217 server (plain_rfc2217_server.py) holds DTR=1/RTS=1; ESP32-S3 USB auto-download mode triggered on every EN-pin reset; see boot log issue below |
 
-**Flash path (confirmed 2026-06-19):** Use `POST http://192.168.1.43:8080/api/flash` with
-multipart `flash_args` + .bin files. Portal (portal.py on Pi) drives GPIO18/17 to enter
-download mode automatically before calling esptool against `/dev/ttyACM0`. No manual
-BOOT+RESET required. Add `/etc/hosts` entry `192.168.1.43 workbench.local` in WSL for
-skill-compatible hostnames.
+**Flash path (confirmed 2026-06-19):**
+- `POST /api/flash` endpoint does NOT exist on this portal version. Actual path:
+  `idf.py -p rfc2217://192.168.1.43:4003 flash` from WSL (IDF venv python required).
+- esptool's `--before default_reset` works via RFC2217 DTR/RTS passthrough for ESP32-S3 USB Serial/JTAG.
+- IDF venv invocation: `IDF_PATH=/home/casey/esp/esp-idf IDF_PYTHON_ENV_PATH=~/.espressif/python_env/idf5.3_py3.12_env ~/.espressif/python_env/idf5.3_py3.12_env/bin/python ~/esp/esp-idf/tools/idf.py -p rfc2217://192.168.1.43:4003 flash`
+- Add `/etc/hosts` entry `192.168.1.43 workbench.local` in WSL (requires sudo; not yet added).
+
+**Boot log issue (2026-06-19):** After flash and hard_reset, the `plain_rfc2217_server.py` process
+reasserts DTR=1/RTS=1 on `/dev/ttyACM0`. When board resets via EN pin or USB reset, these signals
+trigger ESP32-S3 USB auto-download mode (overrides BOOT strapping pin). Board enters "waiting for
+download" instead of running firmware. **Workaround:** User must manually press Key2 (RST/EN) on
+the physical board without any serial client connected — the board's 10KΩ BOOT pull-up will hold
+GPIO0 HIGH and the board will boot the template firmware. Or: stop the RFC2217 server before
+resetting. This is a workbench infrastructure issue, not a firmware bug. Flash SHA verification
+confirms the binary is correct in flash.
 
 **Flash size note:** Build uses `--flash_size 4MB` (from root `sdkconfig.defaults`).
 Physical flash is 16MB (Winbond W25Q128). This is **not a blocker for a first smoke-test

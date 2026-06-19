@@ -7,16 +7,51 @@ Update this at the end of each working session and commit it with the session's 
 
 ## Current State (2026-06-19)
 
-**Phase:** Pre-implementation — hardware validation and workbench path verification complete.
-No firmware code written. First smoke-test flash is unblocked; automated GPIO flash path confirmed.
-Firmware work still blocked on Q1 and Q2 (codebase and build system strategy).
+**Phase:** Stage 1 in progress — template firmware flashed and binary-verified; boot log capture blocked.
+No WeldML code written. Stage 1 is 90% complete; one monitoring issue remains before marking done.
+Stage 2 ready to begin after Stage 1 is confirmed passing.
 
 **Branch:** `main`
-**Last committed:** `302260a` "Record Q9 resolution and session handoff"
+**Last committed:** `08fcb1e` "Add gitignore entries for local Claude config"
 
-**Board state:** SLOT3, `state=idle` (SmrtUsbEsp run mode). No manual reset required before next session.
+**Board state:** SLOT3, `state=idle`. Board has template firmware in flash (SHA verified).
+Board is currently stuck in ROM download mode due to RFC2217 server DTR/RTS issue (see NOTES.md).
+To recover to run mode: manually press Key2 (RST/EN) with no serial client connected.
 
 ---
+
+## Session Handoff — 2026-06-19 (Stage 1 flash attempt)
+
+**Goal:** Stage 1 smoke-test flash. Template firmware flashed and SHA verified.
+Boot log blocked by workbench monitoring issue (see NOTES.md and below).
+
+**Completed this session:**
+- 7-stage implementation plan written to `~/.claude/plans/enter-planning-mode-for-rustling-kite.md`
+- Stage 5 clarified: SCSI quiet-period detection (not sentinel file); Kawasaki marker file is upgrade path
+- `idf.py build` passed (BOARD unset, 4MB flash sdkconfig, 1028/1028 targets)
+- Template firmware flashed via `idf.py -p rfc2217://192.168.1.43:4003 flash` — ALL 5 binaries SHA verified
+- Flash path discovery: `POST /api/flash` does NOT exist on this portal; RFC2217 is the correct path
+- GPIO18 (BOOT) released (portal GPIO API); confirmed Pi GPIO18 = input/value=1
+- New workbench finding: `plain_rfc2217_server.py` holds DTR=1/RTS=1 on ttyACM0; causes ESP32-S3 USB auto-download mode on every reset
+
+**Blocking issue for Stage 1 completion:**
+The board is in ROM download mode ("waiting for download"). Firmware is in flash (verified).
+To get to run mode: **manually press Key2 (RST/EN) on the physical board** while no serial client
+is connected. The 10KΩ pull-up on BOOT/GPIO0 will hold it HIGH and the board will boot normally.
+Then capture boot log by opening a terminal to rfc2217://192.168.1.43:4003 passively (DTR/RTS OFF).
+
+**Next action after board is in run mode:**
+- Confirm boot log shows IDF v5.3.2 startup (WiFi fail is expected — no credentials)
+- Update NOTES.md with "boot log: PASS"
+- Commit: `Stage 1 complete — template firmware boot verified on Waveshare`
+- Proceed to Stage 2 (board config: boards/waveshare-esp32-s3-lcd-147/)
+
+**Stage 1 success criteria remaining:**
+- [ ] Boot log captured showing IDF startup (no panic, no crash-loop)
+- [x] Flash binary verified (SHA hash, all 5 files)
+- [x] No erase_flash used
+- [ ] Commit with Stage 1 result
+- [ ] SESSION_HANDOFF.md updated
 
 ## Session Handoff — 2026-06-19 (workbench discovery)
 
