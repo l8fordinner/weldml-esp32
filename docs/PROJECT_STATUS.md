@@ -7,15 +7,14 @@ Update this at the end of each working session and commit it with the session's 
 
 ## Current State (2026-06-19)
 
-**Phase:** Stage 4 IN PROGRESS. Build PASSED (1066/1066, 357 KB, zero errors).
-Flash blocked — workbench Pi (192.168.1.43) went offline mid-session.
-Next action: restore workbench connectivity, then flash.
+**Phase:** Stage 4 COMPLETE. USB MSC + SD SPI verified on hardware.
+Next: Stage 5 — SCSI quiet-period detection / SD read path (blocked on Q3 + Q6).
 
 **Branch:** `main`
-**Last committed:** f0e66c2 (Stage 4 code + CMake; build confirmed passing this session)
+**Last committed:** (this session — see below)
 
-**Board state:** SLOT3. Firmware from Stage 3 (green LCD) still running on hardware.
-OpenOCD stopped (via /api/debug/stop) before flash attempt. Pi offline — board state unknown.
+**Board state:** SLOT3. Stage 4 firmware running. TinyUSB CDC+MSC active (303a:4003).
+LCD green. OpenOCD stopped (TinyUSB owns USB PHY; JTAG no longer available via USB).
 
 ---
 
@@ -328,6 +327,9 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 | LCD 4-quadrant pattern | Waveshare | rfc2217://192.168.1.43:4003 | 2026-06-19 | PASS | TL=yellow, TR=cyan, BL=blue, BR=red observed (180° rotated vs. programmed) |
 | LCD black semicircle | Waveshare | — | 2026-06-19 | HW DEFECT | Fixed curved artifact top-right; present on all fills; not a software issue |
 | idf.py build (Stage 4) | Waveshare (WSL build) | — | 2026-06-19 | PASS | 1066/1066, 357 KB, zero errors; usb_msc_sd + esp_tinyusb 1.7.6 linked |
+| idf.py flash (Stage 4) | Waveshare | rfc2217://192.168.1.43:4003 | 2026-06-19 | PASS | All 3 binaries SHA verified; BOARD= must be set on every idf.py call |
+| USB TinyUSB enumeration | Waveshare | Pi USB | 2026-06-19 | PASS | 303a:1001 (JTAG) → 303a:4003 (TinyUSB CDC+MSC); OTG PHY switch confirmed |
+| LCD green (Stage 4) | Waveshare | — | 2026-06-19 | PASS | SD card init success; usb_msc_sd_init() returned OK |
 
 ---
 
@@ -373,6 +375,11 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
   - `components/lcd_st7789/` — ST7789 SPI driver, 40 MHz, fill + fill_rect
   - Content displays 180° rotated with MADCTL=0x00 (needs mirror(true,true) before Stage 4 UI work)
   - Fixed black semicircle at physical top-right = hardware/panel artifact (not software)
+- [x] **Stage 4 complete** — USB MSC + SD SPI verified on hardware (2026-06-19)
+  - `components/usb_msc_sd/` — TinyUSB CDC+MSC + SD SPI init; SPI3_HOST, sdspi host, sdmmc_card_init
+  - LCD green = SD card init success; USB re-enumerated 303a:1001→303a:4003 (OTG PHY switch)
+  - MADCTL mirror(true,true) applied in lcd_st7789.c (orientation fix from Stage 3)
+  - **Build rule:** always pass `BOARD=waveshare-esp32-s3-lcd-147` to every `idf.py` call (build AND flash); omitting it poisons the CMake cache with the wrong board.h
 
 ## What Is Blocked
 
@@ -384,10 +391,9 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 
 ## What Is Next
 
-1. **Stage 4 — flash and verify (build already done).**
-   `BOARD=waveshare-esp32-s3-lcd-147 idf.py build` PASSED (1066/1066, 357 KB).
-   Workbench Pi offline blocked flash — restore connectivity and flash via RFC2217.
-   See session handoff above for exact procedure (steps 3–10).
+1. **Stage 5 — SCSI quiet-period detection + SD read path.**
+   Blocked on Q3 (SD ownership transition) and Q6 (robot file-completion signal).
+   Resolve Q6 first: what signal does the robot emit when a weld file is complete?
 
 2. **Add `workbench.local` to WSL `/etc/hosts`** — requires sudo;
    `echo "192.168.1.43 workbench.local" | sudo tee -a /etc/hosts`.
