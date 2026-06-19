@@ -85,7 +85,13 @@ Waveshare ESP32-S3-LCD-1.47?
 - Voltage and polarity compatibility with 3.3 V pull-up on Key1/Key2.
 - Review Universal Embedded Workbench repo wiring documentation.
 
-**Pending until:** Workbench physical setup is inspected.
+**Partially resolved (2026-06-19):**
+- Pi workbench confirmed reachable at 192.168.1.43 (`casey@PiEspWrkbench`).
+- Board enumerates on Pi as `/dev/ttyACM0` and MSC `sda` in run mode.
+- In download mode (after manual BOOT+RESET), `esptool chip-id` and `flash-id` run cleanly from Pi.
+- esptool v5.2.0 is installed on the Pi; ESP-IDF is not.
+- **Remaining unresolved:** WSL→Pi flash path not yet established. See Q9.
+- Pi GPIO wiring for automated BOOT+RESET: not yet verified.
 
 ---
 
@@ -97,7 +103,10 @@ or invest in automated Pi GPIO boot/reset before writing MVP code?
 **Recommendation:** Yes, manual is sufficient for early work. Automate only after the
 MVP inference loop is working and the flash cycle frequency justifies it.
 
-**Pending until:** Developer preference confirmed.
+**Resolved (2026-06-19):** Manual BOOT+RESET confirmed working. Sequence verified:
+hold Key1 (BOOT/GPIO0), press and release Key2 (RST/EN), release Key1. No auto-reset
+circuit exists; this manual sequence is required for every flash cycle. Sufficient
+for MVP development phase.
 
 ---
 
@@ -158,6 +167,31 @@ driver options are compatible.
 
 ---
 
+## Q9: WSL → Pi Flash Path
+
+**Question:** How does `idf.py flash` reach `/dev/ttyACM0` on the Pi from WSL?
+The Pi has esptool but no ESP-IDF. WSL has ESP-IDF but the board is on the Pi USB hub.
+
+**Context:**
+- Board is connected to Pi USB hub, not directly to the Windows/WSL machine.
+- ESP-IDF v5.3.2 is in WSL; esptool v5.2.0 is on the Pi.
+- The Pi workbench may expose an RFC2217 serial proxy (unverified; `ps aux | grep rfc2217` not yet run).
+- Alternatively, the binary can be copied to the Pi and flashed via SSH + esptool.
+
+**Options:**
+- A: RFC2217 proxy on Pi → `idf.py -p rfc2217://192.168.1.43:<port> flash` from WSL.
+- B: `idf.py build` in WSL, then `scp build/*.bin casey@192.168.1.43:~/ && ssh ... esptool write-flash`.
+- C: Install ESP-IDF on Pi and run `idf.py flash` entirely on Pi (over SSH).
+- D: OpenOCD via ESP32-S3 native USB JTAG from WSL (USB passthrough not yet set up).
+
+**Pre-flash blockers regardless of path:**
+- Fix flash size in `sdkconfig.defaults` from 4MB to 16MB (Winbond W25Q128 is 16MB).
+- Fix partition table accordingly before first flash of WeldML firmware.
+
+**Pending until:** RFC2217 status on Pi checked, or alternative path confirmed working.
+
+---
+
 ## Resolution Log
 
 | Q | Status | Decision | Date |
@@ -165,8 +199,9 @@ driver options are compatible.
 | Q1 | Open | | |
 | Q2 | Open | | |
 | Q3 | Open | | |
-| Q4 | Open | | |
-| Q5 | Open | | |
+| Q4 | Partial | Pi USB access + chip-id confirmed; WSL→Pi flash path unresolved (see Q9) | 2026-06-19 |
+| Q5 | **Resolved** | Manual BOOT+RESET works; sufficient for MVP dev phase | 2026-06-19 |
 | Q6 | Open | | |
 | Q7 | Open | | |
 | Q8 | Open | | |
+| Q9 | Open | | |

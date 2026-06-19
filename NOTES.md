@@ -32,6 +32,37 @@ for interactive monitoring. Claude Code uses pyserial for one-shot log capture.
 
 ---
 
+## Waveshare ESP32-S3-LCD-1.47 — Hardware Validation (2026-06-19)
+
+Board connected to Pi workbench (`PiEspWrkbench`, 192.168.1.43) via USB hub.
+Board MAC: `98:3d:ae:e4:4e:ac`
+
+| Test | Result | Notes |
+|------|--------|-------|
+| Pi workbench reachable | PASS | `ssh casey@192.168.1.43` via key auth from WSL |
+| Board enumeration on Pi — CDC | PASS | `/dev/ttyACM0` visible in SmrtUsbEsp run mode |
+| Board enumeration on Pi — MSC | PASS | `sda` / `sda1` (29 GiB SD card) via `lsblk`; TinyUSB Flash Storage 0.2 |
+| BOOT+RESET enters download mode | PASS | Manual button sequence required and confirmed working |
+| No auto-reset circuit | CONFIRMED | DTR/RTS do not trigger reset; button hold is required each flash cycle |
+| Download mode USB enumeration | PASS | idVendor=303a, idProduct=1001 (USB JTAG/serial debug unit, Espressif) |
+| Chip: ESP32-S3 QFN56 rev0.2 | PASS | Verified via `esptool chip-id` (from Pi) |
+| PSRAM: 8MB embedded (AP_3v3) | PASS | Verified via esptool features line |
+| Flash: 16MB Winbond W25Q128 | PASS | Verified via `esptool flash-id`: manufacturer=ef, device=4018, 3.3V quad SPI |
+| Crystal: 40MHz | PASS | Verified via esptool |
+| WSL ESP-IDF v5.3.2 | PASS | `idf.py --version` after sourcing `~/esp/esp-idf/export.sh` |
+| Pi ESP-IDF | NOT INSTALLED | Flash must run from WSL; Pi does not have IDF |
+| Build for esp32s3 target | PASS | `idf.py build` — 1028/1028 targets, zero errors, zero warnings |
+| Flash | NOT RUN | Awaiting explicit approval and flash-size fix (see below) |
+
+**Known issue before first flash:** `sdkconfig.defaults` declares `--flash_size 4MB`.
+Hardware is 16MB (Winbond W25Q128). Must be corrected before flashing to avoid
+writing to only the first 4MB and generating a wrong partition table.
+
+**Known issue — flash path:** Pi does not have ESP-IDF. WSL→Pi flashing path not yet
+established. RFC2217 serial proxy on Pi not yet verified. See OPEN_QUESTIONS.md Q9.
+
+---
+
 ## Deferred to Product Fork
 
 These items are not part of the base template and do not need to be tested here:
