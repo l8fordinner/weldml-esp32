@@ -11,7 +11,7 @@ Update this at the end of each working session and commit it with the session's 
 No WeldML code written yet. Template firmware verified running on Waveshare ESP32-S3.
 
 **Branch:** `main`
-**Last committed:** `bcb9e81`
+**Last committed:** `0f788e0`
 
 **Board state:** SLOT3, `state=idle`, devnode=/dev/ttyACM1. Template firmware running (softAP "ESP32-Setup", HTTP on 192.168.4.1). IDF v5.3.2, no panic, no crash loop. OpenOCD active.
 
