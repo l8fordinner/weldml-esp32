@@ -7,14 +7,59 @@ Update this at the end of each working session and commit it with the session's 
 
 ## Current State (2026-06-19)
 
-**Phase:** Stage 2 complete. `boards/waveshare-esp32-s3-lcd-147/` board config added.
-16MB flash + Octal PSRAM enabled. Build verified (1023/1023). No WeldML firmware code yet.
-Next: Stage 3 — screen color test (LCD only, no USB/SD dependency).
+**Phase:** Stage 3 in progress. LCD driver live — screen turns on and changes color.
+One calibration issue: black space in one corner. x_gap=34 (unverified) may be wrong.
+Next: determine correct x_gap/y_gap, reflash, get user visual confirmation.
 
 **Branch:** `main`
-**Last committed:** `907570d`
+**Last committed:** `d1f1ae3`
+
+**Board state:** SLOT3, firmware `weldml-esp32` running, holding green screen.
+OpenOCD restarted. Screen: live (color changes confirmed). Gap: needs calibration.
 
 **Board state:** SLOT3, `state=idle`, devnode=/dev/ttyACM1. Template firmware running (softAP "ESP32-Setup", HTTP on 192.168.4.1). IDF v5.3.2, no panic, no crash loop. OpenOCD active.
+
+---
+
+## Session Handoff — 2026-06-19 (Stage 3 LCD driver — gap calibration needed)
+
+**Goal:** Screen color test. LCD on, show white→green, visual confirmation.
+
+**Completed:**
+- `components/lcd_st7789/` — ST7789 SPI driver using `esp_lcd`. SPI2_HOST, 40 MHz.
+  `data_endian=LCD_RGB_DATA_ENDIAN_LITTLE` (no software byte-swap needed for uint16_t RGB565).
+  `invert_color=true`. `x_gap=34, y_gap=0` (UNVERIFIED — see issue below).
+- `main/main.c` — replaced WiFi template. Sequence: white 2 s → green held.
+  No WiFi, NVS, MQTT, OTA, SPIFFS.
+- `CMakeLists.txt` — renamed project `weldml-esp32`, removed `spiffs_create_partition_image`.
+- `main/CMakeLists.txt` — REQUIRES `lcd_st7789` only; board include dir added via `$ENV{BOARD}`.
+- `boards/waveshare-esp32-s3-lcd-147/sdkconfig.defaults` — added partition filename override.
+- `boards/waveshare-esp32-s3-lcd-147/partitions.csv` — single factory 3 MB, no OTA/SPIFFS.
+- Build: 1002/1002, zero errors. Binary `weldml-esp32.bin` 248 KB.
+- Flash: all 3 binaries SHA-verified via `idf.py -p rfc2217://192.168.1.43:4003 flash`.
+- Boot log confirmed: 16 MB flash, 8 MB PSRAM test OK, `weldml-esp32`, white@1023ms,
+  green@3048ms, no panic, no crash. Commit `d1f1ae3`.
+
+**Open issue — gap calibration:**
+- Screen turns on and changes color (LCD driver is working).
+- Black space observed in one corner — `x_gap=34` may be wrong.
+- `POST /api/flash` confirmed 404 on this portal; RFC2217 fallback is the only flash path.
+- Need to determine which corner has the black space, then adjust x_gap/y_gap accordingly.
+  Candidates: `x_gap=0` (left-aligned), `x_gap=34` (centered — current), or different y_gap.
+- Do NOT assume x_gap=34 is correct until confirmed visually with zero black border.
+
+**Success criteria — NOT YET MET:**
+- [x] LCD driver builds and runs
+- [x] Screen turns on (backlight, color changes confirmed by user)
+- [x] Boot log clean (white→green sequence confirmed in log)
+- [ ] Full-screen fill with zero black border (gap calibration pending)
+- [ ] User visual confirmation: solid white then solid green, no artifacts
+
+**Next action:** Ask user which corner has the black space, then adjust gap and reflash.
+Candidates to try in order:
+1. `x_gap=0, y_gap=0` — left-aligned in controller space
+2. `x_gap=34, y_gap=0` — centered (current, produced one black corner)
+3. Check Waveshare schematic / datasheet for confirmed offset values.
 
 ---
 
