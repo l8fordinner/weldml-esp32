@@ -14,6 +14,9 @@ CONFIG_BOARD_HAS_WIFI=y
 CONFIG_BOARD_HAS_NATIVE_USB=y
 CONFIG_BOARD_HAS_ZIGBEE=n
 
+# Partition table — board-specific single-factory layout (no OTA/SPIFFS at this stage)
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="boards/waveshare-esp32-s3-lcd-147/partitions.csv"
+
 # Flash — 16MB, overrides root 4MB default (required before OTA expansion or SPIFFS > 4MB)
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="16MB"

@@ -1,14 +1,12 @@
+if(DEFINED ENV{BOARD})
+    set(BOARD_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/boards/$ENV{BOARD}")
+else()
+    set(BOARD_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/boards/esp32-s3")
+endif()
+
 idf_component_register(
     SRCS "main.c"
-    INCLUDE_DIRS "."
+    INCLUDE_DIRS "." "${BOARD_INCLUDE_DIR}"
     REQUIRES
-        nvs_flash
-        esp_wifi
-        esp_event
-        esp_netif
-        esp_http_server
-        esp_https_ota
-        app_mqtt
-        webserver
-        ota
+        lcd_st7789
 )
