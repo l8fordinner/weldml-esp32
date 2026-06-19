@@ -1,0 +1,207 @@
+{
+  "model_id": "model_b_loocv947_coarse_tree",
+  "source_artifacts": [
+    "results\\saved_models\\20260428_083434Z_coarse_tree.joblib",
+    "results\\saved_models\\20260428_083434Z_coarse_tree.json"
+  ],
+  "selection_reason": "Selected because it achieved 0.9473684210526315 LOOCV accuracy and has the simplest embedded port path.",
+  "model_type": "sklearn DecisionTreeClassifier",
+  "parameters": {
+    "max_depth": 2,
+    "random_state": 42
+  },
+  "feature_order": [
+    "RotationSpeed",
+    "CWT_DominantScale",
+    "CWT_EnergyEntropy",
+    "CWT_MaxScaleEnergy",
+    "CWT_MinScaleEnergy",
+    "CWT_TotalEnergy",
+    "ClearanceFactor",
+    "CrestFactor",
+    "FFT_DominantFreq",
+    "FFT_FrequencyBandwidth",
+    "FFT_SpectralCentroid",
+    "FFT_SpectralFlatness",
+    "FFT_SpectralSpread",
+    "ImpulseFactor",
+    "MaxForceBelow3mm",
+    "Mean",
+    "MinPositionStage3",
+    "PeakValue",
+    "PlungeVelocity",
+    "RMS",
+    "ShapeFactor",
+    "StandardDeviation"
+  ],
+  "tree": {
+    "node_count": 5,
+    "max_depth": 2,
+    "nodes": [
+      {
+        "node_index": 0,
+        "is_leaf": false,
+        "feature_index": 16,
+        "feature_name": "MinPositionStage3",
+        "threshold": 2.1850000619888306,
+        "left_child": 1,
+        "right_child": 2,
+        "class_value": [
+          0.5,
+          0.5
+        ],
+        "class_probability": [
+          0.5,
+          0.5
+        ],
+        "leaf_class": null
+      },
+      {
+        "node_index": 1,
+        "is_leaf": true,
+        "feature_index": null,
+        "feature_name": null,
+        "threshold": null,
+        "left_child": -1,
+        "right_child": -1,
+        "class_value": [
+          1.0,
+          0.0
+        ],
+        "class_probability": [
+          1.0,
+          0.0
+        ],
+        "leaf_class": 0
+      },
+      {
+        "node_index": 2,
+        "is_leaf": false,
+        "feature_index": 9,
+        "feature_name": "FFT_FrequencyBandwidth",
+        "threshold": 0.24015963822603226,
+        "left_child": 3,
+        "right_child": 4,
+        "class_value": [
+          0.05,
+          0.95
+        ],
+        "class_probability": [
+          0.05,
+          0.95
+        ],
+        "leaf_class": null
+      },
+      {
+        "node_index": 3,
+        "is_leaf": true,
+        "feature_index": null,
+        "feature_name": null,
+        "threshold": null,
+        "left_child": -1,
+        "right_child": -1,
+        "class_value": [
+          1.0,
+          0.0
+        ],
+        "class_probability": [
+          1.0,
+          0.0
+        ],
+        "leaf_class": 0
+      },
+      {
+        "node_index": 4,
+        "is_leaf": true,
+        "feature_index": null,
+        "feature_name": null,
+        "threshold": null,
+        "left_child": -1,
+        "right_child": -1,
+        "class_value": [
+          0.0,
+          1.0
+        ],
+        "class_probability": [
+          0.0,
+          1.0
+        ],
+        "leaf_class": 1
+      }
+    ],
+    "routing_rule": "At a split node, if features[feature_index] <= threshold go to left_child, else right_child."
+  },
+  "evaluation_metrics": {
+    "loocv_summary": {
+      "accuracy": 0.9473684210526315,
+      "num_samples": 38,
+      "true_positive": 18,
+      "true_negative": 18,
+      "false_positive": 1,
+      "false_negative": 1
+    },
+    "controlled_gap_direct_score": {
+      "accuracy": 0.0,
+      "num_samples": 8,
+      "true_positive": 0,
+      "true_negative": 0,
+      "false_positive": 2,
+      "false_negative": 6
+    }
+  },
+  "controlled_gap_predictions": [
+    {
+      "file": "l313.fsj",
+      "true_label": 0,
+      "predicted_label": 1,
+      "class_1_probability": 1.0
+    },
+    {
+      "file": "l314.fsj",
+      "true_label": 0,
+      "predicted_label": 1,
+      "class_1_probability": 1.0
+    },
+    {
+      "file": "l315.fsj",
+      "true_label": 1,
+      "predicted_label": 0,
+      "class_1_probability": 0.0
+    },
+    {
+      "file": "l316.fsj",
+      "true_label": 1,
+      "predicted_label": 0,
+      "class_1_probability": 0.0
+    },
+    {
+      "file": "l317.fsj",
+      "true_label": 1,
+      "predicted_label": 0,
+      "class_1_probability": 0.0
+    },
+    {
+      "file": "l318.fsj",
+      "true_label": 1,
+      "predicted_label": 0,
+      "class_1_probability": 0.0
+    },
+    {
+      "file": "l319.fsj",
+      "true_label": 1,
+      "predicted_label": 0,
+      "class_1_probability": 0.0
+    },
+    {
+      "file": "l320.fsj",
+      "true_label": 1,
+      "predicted_label": 0,
+      "class_1_probability": 0.0
+    }
+  ],
+  "estimated_cost": {
+    "node_count": 5,
+    "rough_flash_bytes_for_nodes": 160,
+    "note": "Very small. Can be implemented as nested if/else or a static node table."
+  }
+}

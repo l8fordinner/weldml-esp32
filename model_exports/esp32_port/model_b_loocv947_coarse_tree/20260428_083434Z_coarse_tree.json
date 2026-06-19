@@ -1,0 +1,30 @@
+{
+  "model": "Coarse Tree",
+  "kind": "sklearn",
+  "feature_columns": [
+    "RotationSpeed",
+    "CWT_DominantScale",
+    "CWT_EnergyEntropy",
+    "CWT_MaxScaleEnergy",
+    "CWT_MinScaleEnergy",
+    "CWT_TotalEnergy",
+    "ClearanceFactor",
+    "CrestFactor",
+    "FFT_DominantFreq",
+    "FFT_FrequencyBandwidth",
+    "FFT_SpectralCentroid",
+    "FFT_SpectralFlatness",
+    "FFT_SpectralSpread",
+    "ImpulseFactor",
+    "MaxForceBelow3mm",
+    "Mean",
+    "MinPositionStage3",
+    "PeakValue",
+    "PlungeVelocity",
+    "RMS",
+    "ShapeFactor",
+    "StandardDeviation"
+  ],
+  "run_prefix": "20260428_083434Z",
+  "saved_at": "2026-04-28T08:40:44"
+}

@@ -1,0 +1,43 @@
+{
+  "version": "2026-06-19-export",
+  "selected_models": [
+    "model_a_gap100_subspace_knn",
+    "model_b_loocv947_coarse_tree"
+  ],
+  "scaler": null,
+  "scaler_status": "No StandardScaler, RobustScaler, normalization transform, or imputer is used by either selected artifact unless a future artifact inspection proves otherwise.",
+  "column_ordering": [
+    "RotationSpeed",
+    "CWT_DominantScale",
+    "CWT_EnergyEntropy",
+    "CWT_MaxScaleEnergy",
+    "CWT_MinScaleEnergy",
+    "CWT_TotalEnergy",
+    "ClearanceFactor",
+    "CrestFactor",
+    "FFT_DominantFreq",
+    "FFT_FrequencyBandwidth",
+    "FFT_SpectralCentroid",
+    "FFT_SpectralFlatness",
+    "FFT_SpectralSpread",
+    "ImpulseFactor",
+    "MaxForceBelow3mm",
+    "Mean",
+    "MinPositionStage3",
+    "PeakValue",
+    "PlungeVelocity",
+    "RMS",
+    "ShapeFactor",
+    "StandardDeviation"
+  ],
+  "input_dtype": "float32 for exported model compatibility; original training matrix was converted to numpy float32 in run_loocv_models.",
+  "nan_handling": "No imputation found. Input rows must provide finite numeric values for all 22 features; NaN handling should be a caller-side validation error.",
+  "model_a": {
+    "preprocessing": "direct raw feature values; each bagged estimator selects a feature subset internally",
+    "artifact_contains_scaler": false
+  },
+  "model_b": {
+    "preprocessing": "direct raw feature values; decision tree thresholds are in raw feature units",
+    "artifact_contains_scaler": false
+  }
+}

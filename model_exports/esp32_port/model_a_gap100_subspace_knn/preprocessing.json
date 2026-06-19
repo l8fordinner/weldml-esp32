@@ -1,0 +1,4 @@
+{
+  "preprocessing": "direct raw feature values; each bagged estimator selects a feature subset internally",
+  "artifact_contains_scaler": false
+}

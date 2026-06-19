@@ -1,0 +1,36 @@
+{
+  "created_at_utc": "2026-06-19T01:52:25.008402+00:00",
+  "package_root": "exports\\esp32_port",
+  "sklearn_runtime_version": "1.5.2",
+  "files": [
+    "CLASS_MAPPING.json",
+    "FEATURE_SCHEMA.json",
+    "MODEL_SELECTION.md",
+    "PORTING_NOTES.md",
+    "PREPROCESSING.json",
+    "REPRODUCTION_COMMANDS.md",
+    "golden_vectors\\golden_vectors.csv",
+    "golden_vectors\\golden_vectors.json",
+    "model_a_gap100_subspace_knn\\20251219_033334Z_subspace_knn.joblib",
+    "model_a_gap100_subspace_knn\\20251219_033334Z_subspace_knn.json",
+    "model_a_gap100_subspace_knn\\20251219_033801Z_subspace_knn.joblib",
+    "model_a_gap100_subspace_knn\\20251219_033801Z_subspace_knn.json",
+    "model_a_gap100_subspace_knn\\README.md",
+    "model_a_gap100_subspace_knn\\class_mapping.json",
+    "model_a_gap100_subspace_knn\\feature_order.json",
+    "model_a_gap100_subspace_knn\\portable_model.json",
+    "model_a_gap100_subspace_knn\\preprocessing.json",
+    "model_b_loocv947_coarse_tree\\20260428_083434Z_coarse_tree.joblib",
+    "model_b_loocv947_coarse_tree\\20260428_083434Z_coarse_tree.json",
+    "model_b_loocv947_coarse_tree\\README.md",
+    "model_b_loocv947_coarse_tree\\class_mapping.json",
+    "model_b_loocv947_coarse_tree\\feature_order.json",
+    "model_b_loocv947_coarse_tree\\portable_model.json",
+    "model_b_loocv947_coarse_tree\\preprocessing.json"
+  ],
+  "missing_or_uncertain_items": [
+    "Exact physical units are partly inferred from feature names/source logs; verify against feature_extraction.py and original sensor documentation before firmware release.",
+    "Model A sklearn pickle version mismatch remains a portability risk; portable_model.json should be treated as the firmware source representation instead of unpickling on target.",
+    "No final dual-model decision policy is included by design."
+  ]
+}

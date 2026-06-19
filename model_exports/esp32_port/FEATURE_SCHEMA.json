@@ -1,0 +1,179 @@
+{
+  "schema_name": "WeldML ESP32 shared 22-feature schema",
+  "version": "2026-06-19-export",
+  "feature_count": 22,
+  "dtype": "float32 recommended for ESP32 inference; source CSV values are decimal floats",
+  "parser_mode": {
+    "segment_start": "sposm_ge_zero",
+    "feature_groups": [
+      "time",
+      "fft",
+      "cwt"
+    ],
+    "command_flags": [
+      "--segment-start sposm_ge_zero",
+      "--feature-groups time fft cwt"
+    ]
+  },
+  "extraction_windowing_assumptions": [
+    "Features are produced by weldmltrainer.parse_and_clean using the MATLAB-compatible sposm_ge_zero segment start.",
+    "The segment begins at the first SPOSM/SPOSM-style channel value >= 0 and ends at the last STAGE == 3 row, per PROJECT_STATE.md.",
+    "Time, FFT, and CWT feature families must match src/weldmltrainer/feature_extraction.py from this repository state."
+  ],
+  "features": [
+    {
+      "index": 0,
+      "name": "RotationSpeed",
+      "source_column_or_formula": "source column",
+      "units": "rpm",
+      "required": true
+    },
+    {
+      "index": 1,
+      "name": "CWT_DominantScale",
+      "source_column_or_formula": "continuous wavelet transform dominant scale",
+      "units": "scale index",
+      "required": true
+    },
+    {
+      "index": 2,
+      "name": "CWT_EnergyEntropy",
+      "source_column_or_formula": "continuous wavelet transform energy entropy",
+      "units": "unitless",
+      "required": true
+    },
+    {
+      "index": 3,
+      "name": "CWT_MaxScaleEnergy",
+      "source_column_or_formula": "maximum CWT scale energy",
+      "units": "derived energy",
+      "required": true
+    },
+    {
+      "index": 4,
+      "name": "CWT_MinScaleEnergy",
+      "source_column_or_formula": "minimum CWT scale energy",
+      "units": "derived energy",
+      "required": true
+    },
+    {
+      "index": 5,
+      "name": "CWT_TotalEnergy",
+      "source_column_or_formula": "total CWT energy",
+      "units": "derived energy",
+      "required": true
+    },
+    {
+      "index": 6,
+      "name": "ClearanceFactor",
+      "source_column_or_formula": "time-domain force/position signal statistic",
+      "units": "unitless",
+      "required": true
+    },
+    {
+      "index": 7,
+      "name": "CrestFactor",
+      "source_column_or_formula": "time-domain force/position signal statistic",
+      "units": "unitless",
+      "required": true
+    },
+    {
+      "index": 8,
+      "name": "FFT_DominantFreq",
+      "source_column_or_formula": "FFT dominant frequency",
+      "units": "frequency bin/Hz as produced by extractor",
+      "required": true
+    },
+    {
+      "index": 9,
+      "name": "FFT_FrequencyBandwidth",
+      "source_column_or_formula": "FFT bandwidth statistic",
+      "units": "frequency bin/Hz as produced by extractor",
+      "required": true
+    },
+    {
+      "index": 10,
+      "name": "FFT_SpectralCentroid",
+      "source_column_or_formula": "FFT spectral centroid",
+      "units": "frequency bin/Hz as produced by extractor",
+      "required": true
+    },
+    {
+      "index": 11,
+      "name": "FFT_SpectralFlatness",
+      "source_column_or_formula": "FFT spectral flatness",
+      "units": "unitless",
+      "required": true
+    },
+    {
+      "index": 12,
+      "name": "FFT_SpectralSpread",
+      "source_column_or_formula": "FFT spectral spread",
+      "units": "frequency bin/Hz as produced by extractor",
+      "required": true
+    },
+    {
+      "index": 13,
+      "name": "ImpulseFactor",
+      "source_column_or_formula": "time-domain force/position signal statistic",
+      "units": "unitless",
+      "required": true
+    },
+    {
+      "index": 14,
+      "name": "MaxForceBelow3mm",
+      "source_column_or_formula": "maximum force below 3 mm plunge/position threshold",
+      "units": "force units from source log",
+      "required": true
+    },
+    {
+      "index": 15,
+      "name": "Mean",
+      "source_column_or_formula": "time-domain mean",
+      "units": "source signal units",
+      "required": true
+    },
+    {
+      "index": 16,
+      "name": "MinPositionStage3",
+      "source_column_or_formula": "minimum position during Stage 3",
+      "units": "position units from source log",
+      "required": true
+    },
+    {
+      "index": 17,
+      "name": "PeakValue",
+      "source_column_or_formula": "time-domain peak value",
+      "units": "source signal units",
+      "required": true
+    },
+    {
+      "index": 18,
+      "name": "PlungeVelocity",
+      "source_column_or_formula": "plunge velocity",
+      "units": "source velocity units",
+      "required": true
+    },
+    {
+      "index": 19,
+      "name": "RMS",
+      "source_column_or_formula": "root mean square",
+      "units": "source signal units",
+      "required": true
+    },
+    {
+      "index": 20,
+      "name": "ShapeFactor",
+      "source_column_or_formula": "time-domain shape factor",
+      "units": "unitless",
+      "required": true
+    },
+    {
+      "index": 21,
+      "name": "StandardDeviation",
+      "source_column_or_formula": "time-domain standard deviation",
+      "units": "source signal units",
+      "required": true
+    }
+  ]
+}

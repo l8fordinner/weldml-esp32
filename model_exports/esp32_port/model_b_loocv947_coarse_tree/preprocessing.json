@@ -1,0 +1,4 @@
+{
+  "preprocessing": "direct raw feature values; decision tree thresholds are in raw feature units",
+  "artifact_contains_scaler": false
+}

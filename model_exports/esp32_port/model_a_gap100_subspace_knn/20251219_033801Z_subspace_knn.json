@@ -1,0 +1,30 @@
+{
+  "model": "Subspace KNN",
+  "kind": "sklearn",
+  "feature_columns": [
+    "RotationSpeed",
+    "CWT_DominantScale",
+    "CWT_EnergyEntropy",
+    "CWT_MaxScaleEnergy",
+    "CWT_MinScaleEnergy",
+    "CWT_TotalEnergy",
+    "ClearanceFactor",
+    "CrestFactor",
+    "FFT_DominantFreq",
+    "FFT_FrequencyBandwidth",
+    "FFT_SpectralCentroid",
+    "FFT_SpectralFlatness",
+    "FFT_SpectralSpread",
+    "ImpulseFactor",
+    "MaxForceBelow3mm",
+    "Mean",
+    "MinPositionStage3",
+    "PeakValue",
+    "PlungeVelocity",
+    "RMS",
+    "ShapeFactor",
+    "StandardDeviation"
+  ],
+  "run_prefix": "20251219_033801Z",
+  "saved_at": "2025-12-19T03:44:35"
+}
