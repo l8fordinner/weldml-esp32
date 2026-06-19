@@ -57,7 +57,7 @@ Board MAC: `98:3d:ae:e4:4e:ac`
 | OpenOCD auto-started (SLOT3) | CONFIRMED | debugging=true, debug_chip=esp32s3, gdb_port=3335, telnet=4446 |
 | Build for esp32s3 target | PASS | `idf.py build` — 1028/1028 targets, zero errors, zero warnings |
 | Flash (template firmware) | PASS — binary verified | `idf.py -p rfc2217://192.168.1.43:4003 flash` from WSL; SHA hash verified all 5 binaries; esptool v4.11.0; 2026-06-19 |
-| Boot log capture via RFC2217 | BLOCKED | RFC2217 server (plain_rfc2217_server.py) holds DTR=1/RTS=1; ESP32-S3 USB auto-download mode triggered on every EN-pin reset; see boot log issue below |
+| Boot log capture via RFC2217 | PASS | Captured via passive read on /dev/ttyACM1 (DTR/RTS=False); full boot log below |
 
 **Flash path (confirmed 2026-06-19):**
 - `POST /api/flash` endpoint does NOT exist on this portal version. Actual path:
@@ -66,14 +66,25 @@ Board MAC: `98:3d:ae:e4:4e:ac`
 - IDF venv invocation: `IDF_PATH=/home/casey/esp/esp-idf IDF_PYTHON_ENV_PATH=~/.espressif/python_env/idf5.3_py3.12_env ~/.espressif/python_env/idf5.3_py3.12_env/bin/python ~/esp/esp-idf/tools/idf.py -p rfc2217://192.168.1.43:4003 flash`
 - Add `/etc/hosts` entry `192.168.1.43 workbench.local` in WSL (requires sudo; not yet added).
 
-**Boot log issue (2026-06-19):** After flash and hard_reset, the `plain_rfc2217_server.py` process
-reasserts DTR=1/RTS=1 on `/dev/ttyACM0`. When board resets via EN pin or USB reset, these signals
-trigger ESP32-S3 USB auto-download mode (overrides BOOT strapping pin). Board enters "waiting for
-download" instead of running firmware. **Workaround:** User must manually press Key2 (RST/EN) on
-the physical board without any serial client connected — the board's 10KΩ BOOT pull-up will hold
-GPIO0 HIGH and the board will boot the template firmware. Or: stop the RFC2217 server before
-resetting. This is a workbench infrastructure issue, not a firmware bug. Flash SHA verification
-confirms the binary is correct in flash.
+**Boot log (2026-06-19, Stage 1 PASS):**
+```
+rst:0x15 (USB_UART_CHIP_RESET),boot:0x8 (SPI_FAST_FLASH_BOOT)
+ESP-IDF v5.3.2 2nd stage bootloader
+chip revision: v0.2 | SPI Flash Size: 4MB (W: size 16MB > header 4MB — expected, Stage 2 fix)
+App: esp32-base-template v08fcb1e compiled Jun 19 2026 04:30:34
+"ESP32 Base Template starting — IDF vv5.3.2"
+WiFi softAP "ESP32-Setup" at 192.168.4.1
+SPIFFS mounted: 12550/534881 bytes used
+HTTP server started on port 80
+"Startup complete"
+```
+No panic. No crash loop. Template firmware running correctly on Waveshare ESP32-S3.
+
+**RFC2217 monitoring note:** After RST, board re-enumerated as `/dev/ttyACM1` (not `/dev/ttyACM0`).
+Portal auto-restarted RFC2217 server on `/dev/ttyACM1:4003`. Passive read works when DTR/RTS=False.
+`plain_rfc2217_server.py` holds DTR=1/RTS=1 by default — triggers download mode if board is reset
+while serial client is connected with those states. Workaround: set DTR=False/RTS=False before
+reading, or use manual RST press. This is a workbench infrastructure issue, not a firmware bug.
 
 **Flash size note:** Build uses `--flash_size 4MB` (from root `sdkconfig.defaults`).
 Physical flash is 16MB (Winbond W25Q128). This is **not a blocker for a first smoke-test

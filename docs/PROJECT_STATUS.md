@@ -7,16 +7,13 @@ Update this at the end of each working session and commit it with the session's 
 
 ## Current State (2026-06-19)
 
-**Phase:** Stage 1 in progress — template firmware flashed and binary-verified; boot log capture blocked.
-No WeldML code written. Stage 1 is 90% complete; one monitoring issue remains before marking done.
-Stage 2 ready to begin after Stage 1 is confirmed passing.
+**Phase:** Stage 1 complete. Ready for Stage 2 (Waveshare board config).
+No WeldML code written yet. Template firmware verified running on Waveshare ESP32-S3.
 
 **Branch:** `main`
-**Last committed:** `08fcb1e` "Add gitignore entries for local Claude config"
+**Last committed:** `6c6754c` (pending Stage 1 final commit)
 
-**Board state:** SLOT3, `state=idle`. Board has template firmware in flash (SHA verified).
-Board is currently stuck in ROM download mode due to RFC2217 server DTR/RTS issue (see NOTES.md).
-To recover to run mode: manually press Key2 (RST/EN) with no serial client connected.
+**Board state:** SLOT3, `state=idle`, devnode=/dev/ttyACM1. Template firmware running (softAP "ESP32-Setup", HTTP on 192.168.4.1). IDF v5.3.2, no panic, no crash loop.
 
 ---
 
@@ -34,24 +31,12 @@ Boot log blocked by workbench monitoring issue (see NOTES.md and below).
 - GPIO18 (BOOT) released (portal GPIO API); confirmed Pi GPIO18 = input/value=1
 - New workbench finding: `plain_rfc2217_server.py` holds DTR=1/RTS=1 on ttyACM0; causes ESP32-S3 USB auto-download mode on every reset
 
-**Blocking issue for Stage 1 completion:**
-The board is in ROM download mode ("waiting for download"). Firmware is in flash (verified).
-To get to run mode: **manually press Key2 (RST/EN) on the physical board** while no serial client
-is connected. The 10KΩ pull-up on BOOT/GPIO0 will hold it HIGH and the board will boot normally.
-Then capture boot log by opening a terminal to rfc2217://192.168.1.43:4003 passively (DTR/RTS OFF).
-
-**Next action after board is in run mode:**
-- Confirm boot log shows IDF v5.3.2 startup (WiFi fail is expected — no credentials)
-- Update NOTES.md with "boot log: PASS"
-- Commit: `Stage 1 complete — template firmware boot verified on Waveshare`
-- Proceed to Stage 2 (board config: boards/waveshare-esp32-s3-lcd-147/)
-
-**Stage 1 success criteria remaining:**
-- [ ] Boot log captured showing IDF startup (no panic, no crash-loop)
-- [x] Flash binary verified (SHA hash, all 5 files)
+**Stage 1 complete — all success criteria met:**
+- [x] Flash binary verified (SHA hash, all 5 files, esptool v4.11.0)
+- [x] Boot log captured: IDF v5.3.2, no panic, no crash loop, "Startup complete"
 - [x] No erase_flash used
-- [ ] Commit with Stage 1 result
-- [ ] SESSION_HANDOFF.md updated
+- [x] Commit and push
+- [x] SESSION_HANDOFF.md updated
 
 ## Session Handoff — 2026-06-19 (workbench discovery)
 
@@ -97,8 +82,8 @@ cd build && curl -s -X POST http://workbench.local:8080/api/flash \
 **Verification status:**
 - Portal API (`/api/flash`): not yet tested with full flash — command confirmed from skill docs
 - RFC2217 connection: verified ✓ (chip_id tested)
-- Flash: NOT RUN — awaiting approval
-- Monitor: NOT RUN — awaiting approval
+- Flash: PASS — `idf.py -p rfc2217://192.168.1.43:4003 flash`, all 5 binaries SHA verified
+- Boot log: PASS — IDF v5.3.2, no panic, softAP up, "Startup complete"
 - OpenOCD/JTAG: auto-started, confirmed in `/api/devices`; GDB not yet connected from WSL
 
 **Next action:** Say "approve first flash" to proceed, or resolve Q1/Q2 for firmware work.
@@ -139,7 +124,8 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 | chip-id (esptool) | Waveshare | /dev/ttyACM0 (Pi) | 2026-06-19 | PASS | ESP32-S3 QFN56 rev0.2, 8MB PSRAM, MAC 98:3d:ae:e4:4e:ac |
 | flash-id (esptool) | Waveshare | /dev/ttyACM0 (Pi) | 2026-06-19 | PASS | 16MB Winbond W25Q128 (ef/4018), 3.3V quad SPI |
 | idf.py build (esp32s3) | Waveshare (WSL build) | — | 2026-06-19 | PASS | IDF v5.3.2, 1028/1028 targets, zero errors |
-| idf.py flash | Waveshare | — | — | NOT RUN | Q9 resolved; awaiting explicit approval |
+| idf.py flash (template) | Waveshare | rfc2217://192.168.1.43:4003 | 2026-06-19 | PASS | All 5 binaries SHA verified; esptool v4.11.0 |
+| Boot log (template) | Waveshare | /dev/ttyACM1 (passive read) | 2026-06-19 | PASS | IDF v5.3.2, no panic, softAP up, "Startup complete" |
 
 ---
 
@@ -182,16 +168,16 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 
 ## What Is Blocked
 
-- [ ] **First flash** — awaiting explicit approval only; all technical blockers cleared
+- [x] **Stage 1 complete** — template firmware flashed and boot-verified on Waveshare ESP32-S3
 - [ ] `boards/waveshare-esp32-s3-lcd-147/` board config — blocked on Q1/Q2
 - [ ] Any firmware components (LCD driver, SD init, inference engine) — blocked on Q1/Q2/Q6/Q8
 - [ ] Automated workbench flash workflow — Pi GPIO wiring for Key1/Key2 still unverified
 
 ## What Is Next
 
-1. **First flash of Waveshare board** — say "approve first flash"; use `POST /api/flash` via portal (automated GPIO download mode) or fallback `idf.py -p rfc2217://192.168.1.43:4003 flash`. Add `workbench.local` alias to WSL `/etc/hosts` first.
-2. **Resolve Q1 and Q2** — codebase strategy and build system decision; blocks all firmware components.
-3. **Create board config** `boards/waveshare-esp32-s3-lcd-147/` once Q1/Q2 resolved — include `CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y` to fix flash size correctly.
+1. **Stage 2** — Create `boards/waveshare-esp32-s3-lcd-147/` board config (16MB flash, PSRAM, correct GPIO defines). Say "proceed Stage 2" to start.
+2. **Resolve Q1** — architecture decision (gut main.c + port TinyUSB/SD as components is the current plan; confirm to unlock Stage 3+).
+3. **Add `workbench.local` to WSL `/etc/hosts`** — requires sudo; `echo "192.168.1.43 workbench.local" | sudo tee -a /etc/hosts`.
 
 ---
 
