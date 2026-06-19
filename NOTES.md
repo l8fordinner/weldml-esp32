@@ -52,11 +52,17 @@ Board MAC: `98:3d:ae:e4:4e:ac`
 | WSL ESP-IDF v5.3.2 | PASS | `idf.py --version` after sourcing `~/esp/esp-idf/export.sh` |
 | Pi ESP-IDF | NOT INSTALLED | Flash must run from WSL; Pi does not have IDF |
 | Build for esp32s3 target | PASS | `idf.py build` — 1028/1028 targets, zero errors, zero warnings |
-| Flash | NOT RUN | Awaiting explicit approval and flash-size fix (see below) |
+| Flash | NOT RUN | Awaiting explicit approval; Q9 (WSL→Pi path) still unresolved |
 
-**Known issue before first flash:** `sdkconfig.defaults` declares `--flash_size 4MB`.
-Hardware is 16MB (Winbond W25Q128). Must be corrected before flashing to avoid
-writing to only the first 4MB and generating a wrong partition table.
+**Flash size note:** Build uses `--flash_size 4MB` (from root `sdkconfig.defaults`).
+Physical flash is 16MB (Winbond W25Q128). This is **not a blocker for a first smoke-test
+flash**: `partitions.csv` ends at 0x3f0000 (3.94 MB) and fits entirely within 4MB; the
+upper 12MB is simply unused at runtime. No data goes to wrong addresses; the firmware
+will boot and run correctly. The correct fix is to create
+`boards/waveshare-esp32-s3-lcd-147/sdkconfig.defaults` with
+`CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y` as part of board-specific setup (blocked on Q1/Q2).
+Do not change root `sdkconfig.defaults` or `boards/esp32-s3/sdkconfig.defaults`.
+Required before: OTA layout expansion, SPIFFS growth above 4MB, or real WeldML firmware deployment.
 
 **Known issue — flash path:** Pi does not have ESP-IDF. WSL→Pi flashing path not yet
 established. RFC2217 serial proxy on Pi not yet verified. See OPEN_QUESTIONS.md Q9.

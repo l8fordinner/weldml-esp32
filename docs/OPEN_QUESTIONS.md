@@ -184,9 +184,12 @@ The Pi has esptool but no ESP-IDF. WSL has ESP-IDF but the board is on the Pi US
 - C: Install ESP-IDF on Pi and run `idf.py flash` entirely on Pi (over SSH).
 - D: OpenOCD via ESP32-S3 native USB JTAG from WSL (USB passthrough not yet set up).
 
-**Pre-flash blockers regardless of path:**
-- Fix flash size in `sdkconfig.defaults` from 4MB to 16MB (Winbond W25Q128 is 16MB).
-- Fix partition table accordingly before first flash of WeldML firmware.
+**Flash size note:** Build uses `--flash_size 4MB` (root `sdkconfig.defaults`). This is
+**not a blocker for a first smoke-test flash** — `partitions.csv` fits within 4MB and the
+chip's upper 12MB is simply unused at runtime. Correct fix is to add
+`CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y` to the future `boards/waveshare-esp32-s3-lcd-147/sdkconfig.defaults`.
+Do not change root `sdkconfig.defaults` or `boards/esp32-s3/sdkconfig.defaults`.
+Required before: OTA expansion, SPIFFS above 4MB, or production WeldML firmware deployment.
 
 **Pending until:** RFC2217 status on Pi checked, or alternative path confirmed working.
 

@@ -49,7 +49,7 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 | chip-id (esptool) | Waveshare | /dev/ttyACM0 (Pi) | 2026-06-19 | PASS | ESP32-S3 QFN56 rev0.2, 8MB PSRAM, MAC 98:3d:ae:e4:4e:ac |
 | flash-id (esptool) | Waveshare | /dev/ttyACM0 (Pi) | 2026-06-19 | PASS | 16MB Winbond W25Q128 (ef/4018), 3.3V quad SPI |
 | idf.py build (esp32s3) | Waveshare (WSL build) | — | 2026-06-19 | PASS | IDF v5.3.2, 1028/1028 targets, zero errors |
-| idf.py flash | Waveshare | — | — | NOT RUN | Blocked: flash size fix needed + Q9 (WSL→Pi path) |
+| idf.py flash | Waveshare | — | — | NOT RUN | Blocked on Q9 (WSL→Pi path); flash size at 4MB is safe for smoke test |
 
 ---
 
@@ -84,7 +84,7 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 
 ## What Is Blocked
 
-- [ ] **First flash** — blocked on: (1) fix sdkconfig.defaults flash size 4MB→16MB, (2) resolve Q9 (WSL→Pi flash path)
+- [ ] **First flash** — blocked only on Q9 (WSL→Pi flash path); 4MB flash size is safe for smoke test
 - [ ] `boards/waveshare-esp32-s3-lcd-147/` board config — blocked on Q1/Q2
 - [ ] Any firmware components (LCD driver, SD init, inference engine) — blocked on Q1/Q2/Q6/Q8
 - [ ] Automated workbench flash workflow — blocked on Q9 + Pi GPIO wiring (unverified)
@@ -92,19 +92,23 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 ## What Is Next
 
 1. **Resolve Q9** — verify RFC2217 proxy on Pi (`ps aux | grep rfc2217`) or choose alternate flash path.
-2. **Fix flash size** — update `sdkconfig.defaults`: `CONFIG_ESPTOOLPY_FLASHSIZE_4MB=n`, `CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y`, update partition table for 16MB.
-3. **First flash of Waveshare board** — after Q9 resolved and flash size fixed; requires explicit approval.
-4. **Resolve Q1 and Q2** — codebase strategy and build system decision; blocks all firmware components.
-5. **Create board config** `boards/waveshare-esp32-s3-lcd-147/` once Q1/Q2 resolved.
+2. **First flash of Waveshare board** — after Q9 resolved; requires explicit approval.
+3. **Resolve Q1 and Q2** — codebase strategy and build system decision; blocks all firmware components.
+4. **Create board config** `boards/waveshare-esp32-s3-lcd-147/` once Q1/Q2 resolved — include `CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y` to fix flash size correctly.
 
 ---
 
 ## Known Conflicts to Resolve Before First Build
 
-| Issue | File | Current value | Correct value |
-|-------|------|--------------|--------------|
-| Flash size | `sdkconfig.defaults` | 4 MB | 16 MB (W25Q128JVSI) |
-| PSRAM not enabled | `sdkconfig.defaults` | not set | CONFIG_SPIRAM=y, CONFIG_SPIRAM_MODE_OCT=y |
-| Generic SPI pins | `boards/esp32-s3/board.h` | MOSI=11, CLK=12, CS=10 | LCD: MOSI=45, CLK=40, CS=42; SD: CLK=14, MOSI=15, CS=21 |
-| LED pin conflict | `boards/esp32-s3/board.h` | BOARD_LED_PIN=48 | GPIO48 is LCD backlight — cannot be used as LED |
-| Partition table | `partitions.csv` | 4 MB layout | Needs 16 MB layout for Waveshare board |
+| Issue | File | Current value | Correct value | Blocks first smoke-test flash? |
+|-------|------|--------------|--------------|-------------------------------|
+| Flash size declared as 4MB | root `sdkconfig.defaults` | 4 MB | 16 MB in `boards/waveshare-esp32-s3-lcd-147/sdkconfig.defaults` | **No** — partitions.csv fits within 4MB; upper 12MB unused but safe |
+| PSRAM not enabled | `sdkconfig.defaults` | not set | CONFIG_SPIRAM=y, CONFIG_SPIRAM_MODE_OCT=y | No — template firmware does not use PSRAM |
+| Generic SPI pins | `boards/esp32-s3/board.h` | MOSI=11, CLK=12, CS=10 | LCD: MOSI=45, CLK=40, CS=42; SD: CLK=14, MOSI=15, CS=21 | Yes — for WeldML firmware; not for template smoke test |
+| LED pin conflict | `boards/esp32-s3/board.h` | BOARD_LED_PIN=48 | GPIO48 is LCD backlight — cannot be used as LED | Yes — for WeldML firmware; not for template smoke test |
+| Partition table comment | `partitions.csv` | "Total flash assumed: 4 MB" | No functional change needed; layout is address-based and safe on 16MB | No |
+
+**Fix path for flash size:** Create `boards/waveshare-esp32-s3-lcd-147/sdkconfig.defaults` with
+`CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y`. Do **not** change root `sdkconfig.defaults` or
+`boards/esp32-s3/sdkconfig.defaults`. Required before OTA layout expansion, SPIFFS
+growth above 4MB, or production WeldML firmware deployment.
