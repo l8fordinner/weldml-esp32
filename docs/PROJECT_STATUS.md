@@ -7,13 +7,42 @@ Update this at the end of each working session and commit it with the session's 
 
 ## Current State (2026-06-19)
 
-**Phase:** Stage 1 complete. RFC2217 monitor/reset workflow resolved. Ready for Stage 2.
-No WeldML code written yet. Template firmware verified running on Waveshare ESP32-S3.
+**Phase:** Stage 2 complete. `boards/waveshare-esp32-s3-lcd-147/` board config added.
+16MB flash + Octal PSRAM enabled. Build verified (1023/1023). No WeldML firmware code yet.
+Q1/Q2 still open — firmware components blocked until architecture decision.
 
 **Branch:** `main`
-**Last committed:** `0f788e0`
+**Last committed:** `907570d`
 
 **Board state:** SLOT3, `state=idle`, devnode=/dev/ttyACM1. Template firmware running (softAP "ESP32-Setup", HTTP on 192.168.4.1). IDF v5.3.2, no panic, no crash loop. OpenOCD active.
+
+---
+
+## Session Handoff — 2026-06-19 (Stage 2 board config)
+
+**Goal:** Create `boards/waveshare-esp32-s3-lcd-147/` board config.
+
+**Completed:**
+- `boards/waveshare-esp32-s3-lcd-147/board.h` — all hardware-confirmed GPIO defines:
+  LCD SPI (MOSI=45, CLK=40, CS=42, DC=41, RST=39), LCD backlight (GPIO48, MOSFET gate),
+  SD SPI (CLK=14, MOSI=15, MISO=16, CS=21), WS2812B RGB LED (GPIO38), BOOT button (GPIO0).
+  GPIO48 and GPIO38 named correctly to prevent misuse as generic GPIO.
+- `boards/waveshare-esp32-s3-lcd-147/sdkconfig.defaults` — 16MB flash (overrides root 4MB),
+  8MB Octal PSRAM (`CONFIG_SPIRAM=y`, `CONFIG_SPIRAM_MODE_OCT=y`).
+- Build verified: `BOARD=waveshare-esp32-s3-lcd-147 idf.py build` → 1023/1023 targets, zero errors.
+  Generated sdkconfig confirms `CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y`, `CONFIG_SPIRAM_MODE_OCT=y`.
+  Flash command shows `--flash_size 16MB`.
+- Committed `907570d`, pushed to origin/main.
+
+**Success criteria — all met:**
+- [x] `boards/waveshare-esp32-s3-lcd-147/board.h` created with all confirmed GPIO defines
+- [x] `boards/waveshare-esp32-s3-lcd-147/sdkconfig.defaults` created with 16MB flash + PSRAM
+- [x] `BOARD=waveshare-esp32-s3-lcd-147 idf.py build` passes (1023/1023, zero errors)
+- [x] Generated sdkconfig confirms 16MB flash and Octal PSRAM
+- [x] Committed and pushed
+
+**Next action:** Resolve Q1 (architecture decision: port SmrtUsbEsp code vs. other options)
+to unblock Stage 3 firmware components (TinyUSB MSC, SD init, LCD driver).
 
 ---
 
@@ -198,14 +227,14 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 ## What Is Blocked
 
 - [x] **Stage 1 complete** — template firmware flashed and boot-verified on Waveshare ESP32-S3
-- [ ] `boards/waveshare-esp32-s3-lcd-147/` board config — blocked on Q1/Q2
+- [x] **Stage 2 complete** — `boards/waveshare-esp32-s3-lcd-147/` board config added, build verified
 - [ ] Any firmware components (LCD driver, SD init, inference engine) — blocked on Q1/Q2/Q6/Q8
 - [ ] Automated workbench flash workflow — Pi GPIO wiring for Key1/Key2 still unverified
 
 ## What Is Next
 
-1. **Stage 2** — Create `boards/waveshare-esp32-s3-lcd-147/` board config (16MB flash, PSRAM, correct GPIO defines). Say "proceed Stage 2" to start.
-2. **Resolve Q1** — architecture decision (gut main.c + port TinyUSB/SD as components is the current plan; confirm to unlock Stage 3+).
+1. **Resolve Q1** — architecture decision (port SmrtUsbEsp USB MSC + SD + LED code into weldml-esp32 as new components is current candidate; confirm to unlock Stage 3+).
+2. **Stage 3** — Add TinyUSB MSC + CDC components (blocks on Q1/Q2).
 3. **Add `workbench.local` to WSL `/etc/hosts`** — requires sudo; `echo "192.168.1.43 workbench.local" | sudo tee -a /etc/hosts`.
 
 ---
