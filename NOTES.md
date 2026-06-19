@@ -57,7 +57,7 @@ Board MAC: `98:3d:ae:e4:4e:ac`
 | OpenOCD auto-started (SLOT3) | CONFIRMED | debugging=true, debug_chip=esp32s3, gdb_port=3335, telnet=4446 |
 | Build for esp32s3 target | PASS | `idf.py build` — 1028/1028 targets, zero errors, zero warnings |
 | Flash (template firmware) | PASS — binary verified | `idf.py -p rfc2217://192.168.1.43:4003 flash` from WSL; SHA hash verified all 5 binaries; esptool v4.11.0; 2026-06-19 |
-| Boot log capture via RFC2217 | PASS | Captured via passive read on /dev/ttyACM1 (DTR/RTS=False); full boot log below |
+| Boot log capture via portal API | PASS | `POST /api/serial/reset` (with OpenOCD stopped) returns full boot log via DTR/RTS path; 76 lines captured 2026-06-19 |
 
 **Flash path (confirmed 2026-06-19):**
 - `POST /api/flash` endpoint does NOT exist on this portal version. Actual path:
@@ -80,11 +80,44 @@ HTTP server started on port 80
 ```
 No panic. No crash loop. Template firmware running correctly on Waveshare ESP32-S3.
 
-**RFC2217 monitoring note:** After RST, board re-enumerated as `/dev/ttyACM1` (not `/dev/ttyACM0`).
-Portal auto-restarted RFC2217 server on `/dev/ttyACM1:4003`. Passive read works when DTR/RTS=False.
-`plain_rfc2217_server.py` holds DTR=1/RTS=1 by default — triggers download mode if board is reset
-while serial client is connected with those states. Workaround: set DTR=False/RTS=False before
-reading, or use manual RST press. This is a workbench infrastructure issue, not a firmware bug.
+**RFC2217 monitoring note (resolved 2026-06-19):**
+
+After RST, board re-enumerated as `/dev/ttyACM1` (not `/dev/ttyACM0`).
+Portal auto-restarted RFC2217 server on `/dev/ttyACM1:4003`.
+
+Root cause analysis: `plain_rfc2217_server.py` correctly sets DTR=False/RTS=False on startup
+and after each client disconnect. The download-mode trigger was two separate issues:
+
+1. **JTAG path skips boot log:** When OpenOCD is running (debugging=true), `POST /api/serial/reset`
+   uses `reset run` via telnet — which resets the CPU but returns JTAG output, not serial boot log.
+   The DTR/RTS path (which captures boot output) is only taken when OpenOCD is stopped.
+
+2. **idf.py monitor asserts DTR=True via RFC2217:** The IDF monitor's pyserial client sends
+   `SET_CONTROL DTR_ON` during RFC2217 negotiation. The PortManager passes this through to
+   `/dev/ttyACM1`, causing the ESP32-S3 USB-JTAG peripheral to hold GPIO0 LOW. If the board
+   resets while the monitor is connected, it enters download mode.
+
+**Verified repeatable workflow (2026-06-19):**
+
+```bash
+# Flash (unchanged)
+IDF_PATH=... idf.py -p rfc2217://192.168.1.43:4003 flash
+
+# Capture boot log via portal (stop OpenOCD first to use DTR/RTS path)
+curl -X POST http://192.168.1.43:8080/api/debug/stop \
+  -H 'Content-Type: application/json' -d '{"slot": "SLOT3"}'
+curl -X POST http://192.168.1.43:8080/api/serial/reset \
+  -H 'Content-Type: application/json' -d '{"slot": "SLOT3"}'
+# → Full boot log returned in JSON "output" array
+curl -X POST http://192.168.1.43:8080/api/debug/start \
+  -H 'Content-Type: application/json' -d '{"slot": "SLOT3"}'
+
+# Interactive monitor: --no-reset prevents DTR=True assertion
+idf.py -p rfc2217://192.168.1.43:4003 monitor --no-reset
+```
+
+Boot log verified via DTR/RTS reset on 2026-06-19: IDF v5.3.2, no panic, softAP up, "Startup complete".
+Full 76-line boot log captured in single API call. This is a workbench infrastructure behavior, not a firmware bug.
 
 **Flash size note:** Build uses `--flash_size 4MB` (from root `sdkconfig.defaults`).
 Physical flash is 16MB (Winbond W25Q128). This is **not a blocker for a first smoke-test

@@ -7,13 +7,36 @@ Update this at the end of each working session and commit it with the session's 
 
 ## Current State (2026-06-19)
 
-**Phase:** Stage 1 complete. Ready for Stage 2 (Waveshare board config).
+**Phase:** Stage 1 complete. RFC2217 monitor/reset workflow resolved. Ready for Stage 2.
 No WeldML code written yet. Template firmware verified running on Waveshare ESP32-S3.
 
 **Branch:** `main`
-**Last committed:** `6c6754c` (pending Stage 1 final commit)
+**Last committed:** `bcb9e81`
 
-**Board state:** SLOT3, `state=idle`, devnode=/dev/ttyACM1. Template firmware running (softAP "ESP32-Setup", HTTP on 192.168.4.1). IDF v5.3.2, no panic, no crash loop.
+**Board state:** SLOT3, `state=idle`, devnode=/dev/ttyACM1. Template firmware running (softAP "ESP32-Setup", HTTP on 192.168.4.1). IDF v5.3.2, no panic, no crash loop. OpenOCD active.
+
+---
+
+## Session Handoff — 2026-06-19 (RFC2217 monitor/reset fix)
+
+**Goal:** Resolve Stage 1 monitor blocker — establish repeatable flash → reset/boot → log workflow.
+
+**Completed:**
+- Root-caused RFC2217 monitoring issue: when OpenOCD runs, `POST /api/serial/reset` uses JTAG (`reset run`), not DTR/RTS. JTAG path returns no boot log.
+- Fix: stop OpenOCD → `POST /api/serial/reset` uses DTR/RTS path → captures full boot log → restart OpenOCD.
+- Verified: 76-line boot log captured in single API call: IDF v5.3.2, no panic, softAP up, "Startup complete".
+- Confirmed: `plain_rfc2217_server.py` already sets DTR=False/RTS=False on startup and after client disconnect — it does NOT hold DTR=1/RTS=1. Prior note in NOTES.md was inaccurate; corrected.
+- Confirmed: `idf.py monitor --no-reset` is the safe interactive monitoring command (prevents DTR=True assertion via RFC2217).
+- Updated NOTES.md with full root cause analysis and verified workflow commands.
+- Updated PROJECT_STATUS.md flash command block with Step 4a (boot log) and Step 4b (interactive monitor).
+
+**Success criteria — all met:**
+- [x] Repeatable flash → reset/boot → monitor sequence established
+- [x] Boot log captured from flashed firmware (76 lines, verified 2026-06-19)
+- [x] PROJECT_STATUS.md updated
+- [x] NOTES.md corrected
+
+**Next action:** Stage 2 — Create `boards/waveshare-esp32-s3-lcd-147/` board config. Say "proceed Stage 2" to start.
 
 ---
 
@@ -29,7 +52,7 @@ Boot log blocked by workbench monitoring issue (see NOTES.md and below).
 - Template firmware flashed via `idf.py -p rfc2217://192.168.1.43:4003 flash` — ALL 5 binaries SHA verified
 - Flash path discovery: `POST /api/flash` does NOT exist on this portal; RFC2217 is the correct path
 - GPIO18 (BOOT) released (portal GPIO API); confirmed Pi GPIO18 = input/value=1
-- New workbench finding: `plain_rfc2217_server.py` holds DTR=1/RTS=1 on ttyACM0; causes ESP32-S3 USB auto-download mode on every reset
+- New workbench finding: when OpenOCD runs, `POST /api/serial/reset` uses JTAG (no boot log). DTR/RTS path (with boot log) requires stopping OpenOCD first. See NOTES.md RFC2217 note.
 
 **Stage 1 complete — all success criteria met:**
 - [x] Flash binary verified (SHA hash, all 5 files, esptool v4.11.0)
@@ -71,8 +94,14 @@ cd build && curl -s -X POST http://workbench.local:8080/api/flash \
   -F firmware.bin=@weldml_esp32.bin \
   | jq .
 
-# Step 4 — monitor
-. ~/esp/esp-idf/export.sh && idf.py -p rfc2217://192.168.1.43:4003 monitor
+# Step 4a — capture boot log (stop OpenOCD so portal uses DTR/RTS path, not JTAG)
+curl -X POST http://192.168.1.43:8080/api/debug/stop -H 'Content-Type: application/json' -d '{"slot": "SLOT3"}'
+curl -X POST http://192.168.1.43:8080/api/serial/reset -H 'Content-Type: application/json' -d '{"slot": "SLOT3"}' | python3 -m json.tool
+curl -X POST http://192.168.1.43:8080/api/debug/start -H 'Content-Type: application/json' -d '{"slot": "SLOT3"}'
+# → Full boot log in JSON "output" array; OpenOCD resumed for GDB after
+
+# Step 4b — interactive monitor (--no-reset prevents DTR=True assertion via RFC2217)
+. ~/esp/esp-idf/export.sh && idf.py -p rfc2217://192.168.1.43:4003 monitor --no-reset
 # Exit monitor: Ctrl+]
 
 # Fallback flash (if portal API unavailable): manual BOOT+RESET then:
