@@ -42,24 +42,36 @@ OpenOCD restarted. Screen: live (color changes confirmed). Gap: needs calibratio
 
 **Open issue — gap calibration:**
 - Screen turns on and changes color (LCD driver is working).
-- Black space observed in one corner — `x_gap=34` may be wrong.
-- `POST /api/flash` confirmed 404 on this portal; RFC2217 fallback is the only flash path.
-- Need to determine which corner has the black space, then adjust x_gap/y_gap accordingly.
-  Candidates: `x_gap=0` (left-aligned), `x_gap=34` (centered — current), or different y_gap.
+- Black space confirmed in TOP-RIGHT corner when USB connector faces UP.
+  Physical board orientation: USB at top, display below. Black is upper-right.
+- `x_gap=34, y_gap=0` is the current (wrong) setting.
+- `POST /api/flash` confirmed 404 on this portal; RFC2217 is the only flash path.
 - Do NOT assume x_gap=34 is correct until confirmed visually with zero black border.
 
-**Success criteria — NOT YET MET:**
-- [x] LCD driver builds and runs
-- [x] Screen turns on (backlight, color changes confirmed by user)
-- [x] Boot log clean (white→green sequence confirmed in log)
-- [ ] Full-screen fill with zero black border (gap calibration pending)
+**Gap calibration — what to try next session (in order):**
+1. `x_gap=34, y_gap=0` + `esp_lcd_panel_mirror(panel, true, false)` — mirror_x.
+   Rationale: TOP-RIGHT black with x_gap=34 and no mirror is consistent with the
+   physical panel columns being reversed relative to the controller space.
+   If this moves the black strip to the LEFT, the gap itself might also need adjustment.
+2. `x_gap=0, y_gap=0` (no mirror) — left-aligned panel, simplest alternative.
+3. `x_gap=0, y_gap=0` + mirror_x.
+4. Check Waveshare schematic for confirmed MADCTL byte and column/row offsets.
+   The schematic is at `docs/ESP32-S3-LCD-1.47_schematic_diagram.pdf`.
+
+**Stage 3 success criteria:**
+- [x] LCD driver builds (1002/1002, zero errors, binary 248 KB)
+- [x] Flash succeeds — bootloader, partition table, firmware SHA-verified
+- [x] Boot log clean — 16MB flash, 8MB PSRAM OK, white@1023ms, green@3048ms, no panic
+- [x] Screen turns on — backlight active, color changes confirmed by user
+- [ ] Full-screen fill with zero black border — BLOCKED on gap calibration
 - [ ] User visual confirmation: solid white then solid green, no artifacts
 
-**Next action:** Ask user which corner has the black space, then adjust gap and reflash.
-Candidates to try in order:
-1. `x_gap=0, y_gap=0` — left-aligned in controller space
-2. `x_gap=34, y_gap=0` — centered (current, produced one black corner)
-3. Check Waveshare schematic / datasheet for confirmed offset values.
+**Exact next action for a fresh session:**
+Read PROJECT_STATUS.md, then open `docs/ESP32-S3-LCD-1.47_schematic_diagram.pdf` to
+find the ST7789 MADCTL byte and column/row register defaults for this panel. Then try
+the gap calibration sequence in the order listed under "Gap calibration" above.
+Only build, do not flash, until one candidate looks definitively correct.
+Then flash, monitor boot log, ask user for visual confirmation.
 
 ---
 
