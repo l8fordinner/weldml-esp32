@@ -70,8 +70,6 @@ esp_err_t lcd_st7789_init(const lcd_st7789_config_t *cfg)
     ESP_ERROR_CHECK(esp_lcd_panel_reset(s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_init(s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_invert_color(s_panel, true));
-    /* x_gap=34: centers a 172-wide physical panel in the 240-column ST7789
-     * controller space.  Unverified — adjust if image is offset on hardware. */
     ESP_ERROR_CHECK(esp_lcd_panel_set_gap(s_panel, cfg->x_gap, cfg->y_gap));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
 
@@ -90,6 +88,24 @@ esp_err_t lcd_st7789_init(const lcd_st7789_config_t *cfg)
     ESP_LOGI(TAG, "ST7789 ready — %dx%d gap(%d,%d) clk=%dMHz",
              cfg->width, cfg->height, cfg->x_gap, cfg->y_gap,
              LCD_PIXEL_CLK / 1000000);
+    return ESP_OK;
+}
+
+esp_err_t lcd_st7789_fill_rect(int x, int y, int w, int h, uint16_t color)
+{
+    if (!s_panel) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    int tile_pixels = TILE_ROWS * w;
+    for (int i = 0; i < tile_pixels; i++) {
+        s_tile[i] = color;
+    }
+
+    for (int row = y; row < y + h; row += TILE_ROWS) {
+        int rows = ((row + TILE_ROWS) <= (y + h)) ? TILE_ROWS : (y + h - row);
+        ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(s_panel, x, row, x + w, row + rows, s_tile));
+    }
     return ESP_OK;
 }
 

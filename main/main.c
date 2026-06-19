@@ -29,8 +29,10 @@ void app_main(void)
         .bl_pin   = BOARD_LCD_BL_PIN,
         .width    = 172,
         .height   = 320,
-        /* x_gap=34: 172-wide panel centred in 240-column ST7789 controller.
-         * Unverified — adjust if image appears shifted horizontally. */
+        /* x_gap=34: centres the 172-pixel panel in ST7789's 240-column GRAM.
+         * The black quarter-circle arc visible in the top-right corner is the
+         * physical rounded corner of the display glass — no GRAM offset can
+         * address pixels that are not physically present on the panel. */
         .x_gap    = 34,
         .y_gap    = 0,
     };

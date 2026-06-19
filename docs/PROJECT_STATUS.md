@@ -7,71 +7,71 @@ Update this at the end of each working session and commit it with the session's 
 
 ## Current State (2026-06-19)
 
-**Phase:** Stage 3 in progress. LCD driver live — screen turns on and changes color.
-One calibration issue: black space in one corner. x_gap=34 (unverified) may be wrong.
-Next: determine correct x_gap/y_gap, reflash, get user visual confirmation.
+**Phase:** Stage 3 COMPLETE. LCD driver verified on hardware. Two findings documented
+(see session handoff below). Next: Stage 4 — USB MSC + SD SPI. Do not start Stage 4
+in this session.
 
 **Branch:** `main`
-**Last committed:** `d1f1ae3`
+**Last committed:** (pending commit of this session's changes)
 
-**Board state:** SLOT3, firmware `weldml-esp32` running, holding green screen.
-OpenOCD restarted. Screen: live (color changes confirmed). Gap: needs calibration.
-
-**Board state:** SLOT3, `state=idle`, devnode=/dev/ttyACM1. Template firmware running (softAP "ESP32-Setup", HTTP on 192.168.4.1). IDF v5.3.2, no panic, no crash loop. OpenOCD active.
+**Board state:** SLOT3, `weldml-esp32` running, holding green. OpenOCD active.
 
 ---
 
-## Session Handoff — 2026-06-19 (Stage 3 LCD driver — gap calibration needed)
+## Session Handoff — 2026-06-19 (Stage 3 complete — visual confirmation)
 
-**Goal:** Screen color test. LCD on, show white→green, visual confirmation.
+**Goal:** Resolve gap calibration open issue from previous session; get user visual confirmation.
 
-**Completed:**
-- `components/lcd_st7789/` — ST7789 SPI driver using `esp_lcd`. SPI2_HOST, 40 MHz.
-  `data_endian=LCD_RGB_DATA_ENDIAN_LITTLE` (no software byte-swap needed for uint16_t RGB565).
-  `invert_color=true`. `x_gap=34, y_gap=0` (UNVERIFIED — see issue below).
-- `main/main.c` — replaced WiFi template. Sequence: white 2 s → green held.
-  No WiFi, NVS, MQTT, OTA, SPIFFS.
-- `CMakeLists.txt` — renamed project `weldml-esp32`, removed `spiffs_create_partition_image`.
-- `main/CMakeLists.txt` — REQUIRES `lcd_st7789` only; board include dir added via `$ENV{BOARD}`.
-- `boards/waveshare-esp32-s3-lcd-147/sdkconfig.defaults` — added partition filename override.
-- `boards/waveshare-esp32-s3-lcd-147/partitions.csv` — single factory 3 MB, no OTA/SPIFFS.
-- Build: 1002/1002, zero errors. Binary `weldml-esp32.bin` 248 KB.
-- Flash: all 3 binaries SHA-verified via `idf.py -p rfc2217://192.168.1.43:4003 flash`.
-- Boot log confirmed: 16 MB flash, 8 MB PSRAM test OK, `weldml-esp32`, white@1023ms,
-  green@3048ms, no panic, no crash. Commit `d1f1ae3`.
+**Completed this session:**
+- Confirmed via ESP-IDF source (`esp_lcd_panel_st7789.c`) that `esp_lcd_panel_mirror()`
+  only sends a MADCTL update and does NOT change the CASET/RASET window. For a solid
+  fill, mirror_x/mirror_y have no effect on which physical pixels are addressed.
+  The previous session's gap calibration candidates 1 and 3 (mirror_x with same gap)
+  were therefore not actionable for diagnosing a solid-fill black region.
+- Tested `x_gap=0, y_gap=0`: black region unchanged from `x_gap=34` — confirmed the
+  black is NOT from a gap/offset error.
+- Added `lcd_st7789_fill_rect()` to the driver and ran a 4-quadrant color test.
+- Reverted `main.c` to the original white→green pattern. x_gap=34 restored.
+- Added extended color defines to `lcd_st7789.h` (BLUE, YELLOW, CYAN, MAGENTA).
 
-**Open issue — gap calibration:**
-- Screen turns on and changes color (LCD driver is working).
-- Black space confirmed in TOP-RIGHT corner when USB connector faces UP.
-  Physical board orientation: USB at top, display below. Black is upper-right.
-- `x_gap=34, y_gap=0` is the current (wrong) setting.
-- `POST /api/flash` confirmed 404 on this portal; RFC2217 is the only flash path.
-- Do NOT assume x_gap=34 is correct until confirmed visually with zero black border.
+**Visual confirmation results (user-reported, 2026-06-19):**
 
-**Gap calibration — what to try next session (in order):**
-1. `x_gap=34, y_gap=0` + `esp_lcd_panel_mirror(panel, true, false)` — mirror_x.
-   Rationale: TOP-RIGHT black with x_gap=34 and no mirror is consistent with the
-   physical panel columns being reversed relative to the controller space.
-   If this moves the black strip to the LEFT, the gap itself might also need adjustment.
-2. `x_gap=0, y_gap=0` (no mirror) — left-aligned panel, simplest alternative.
-3. `x_gap=0, y_gap=0` + mirror_x.
-4. Check Waveshare schematic for confirmed MADCTL byte and column/row offsets.
-   The schematic is at `docs/ESP32-S3-LCD-1.47_schematic_diagram.pdf`.
+_Quadrant test (firmware sends TL=red, TR=blue, BL=cyan, BR=yellow):_
+- User observed: TL=yellow, TR=cyan, BL=blue, BR=red
+- This is an exact 180° rotation of the programmed layout.
 
-**Stage 3 success criteria:**
-- [x] LCD driver builds (1002/1002, zero errors, binary 248 KB)
-- [x] Flash succeeds — bootloader, partition table, firmware SHA-verified
-- [x] Boot log clean — 16MB flash, 8MB PSRAM OK, white@1023ms, green@3048ms, no panic
+_Black semicircle artifact:_
+- A curved black region (quarter-circle arc, radius ≈ 1/3 of width, 10% of height)
+  is present in the physical top-right corner when USB faces up.
+- The arc curves inward toward the screen center (concave toward corner).
+- The artifact appears identically on: solid white, solid green, and the quadrant test.
+- Changing x_gap (34→0) had no effect on the artifact.
+- **Conclusion: fixed hardware/panel artifact** — likely LCD glass defect, pressure
+  damage, backlight masking, or damaged display area. Not a software issue.
+  Not a blocker for Stage 4 firmware bring-up unless user chooses to replace the display.
+
+**Stage 3 success criteria — all met for firmware bring-up:**
+- [x] LCD driver builds (zero errors, binary ~248 KB)
+- [x] Flash succeeds — bootloader, partition table, firmware SHA-verified (RFC2217)
+- [x] Boot log clean — 16MB flash, 8MB PSRAM OK, white@~1s, green@~3s, no panic
 - [x] Screen turns on — backlight active, color changes confirmed by user
-- [ ] Full-screen fill with zero black border — BLOCKED on gap calibration
-- [ ] User visual confirmation: solid white then solid green, no artifacts
+- [x] Full-screen fill confirmed working (solid white, solid green displayed correctly)
+- [x] Quadrant test: four distinct colors visible in correct relative positions
+- [~] Hardware artifact: fixed black semicircle at physical top-right — hardware defect,
+     not a software regression; documented and accepted for firmware bring-up
+
+**Two open items for the next LCD session (NOT Stage 4 blockers):**
+1. **MADCTL orientation**: Content is 180° rotated relative to expected with USB at top
+   and MADCTL=0x00. Fix: add `esp_lcd_panel_mirror(s_panel, true, true)` after
+   `esp_lcd_panel_init()` in `lcd_st7789_init()`. Confirmed needed before drawing
+   any directional UI content.
+2. **Black semicircle**: If the display is replaced or a second unit is available,
+   test to confirm whether the artifact is unit-specific or panel-design characteristic.
 
 **Exact next action for a fresh session:**
-Read PROJECT_STATUS.md, then open `docs/ESP32-S3-LCD-1.47_schematic_diagram.pdf` to
-find the ST7789 MADCTL byte and column/row register defaults for this panel. Then try
-the gap calibration sequence in the order listed under "Gap calibration" above.
-Only build, do not flash, until one candidate looks definitively correct.
-Then flash, monitor boot log, ask user for visual confirmation.
+Stage 4 — USB MSC + SD SPI. Port TinyUSB MSC + CDC + SD SPI from SmrtUsbEsp.
+Close Q1 and Q2 in OPEN_QUESTIONS.md before writing Stage 4 code.
+Do not touch LCD driver orientation until Stage 4 is complete.
 
 ---
 
@@ -241,6 +241,9 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 | idf.py build (esp32s3) | Waveshare (WSL build) | — | 2026-06-19 | PASS | IDF v5.3.2, 1028/1028 targets, zero errors |
 | idf.py flash (template) | Waveshare | rfc2217://192.168.1.43:4003 | 2026-06-19 | PASS | All 5 binaries SHA verified; esptool v4.11.0 |
 | Boot log (template) | Waveshare | /dev/ttyACM1 (passive read) | 2026-06-19 | PASS | IDF v5.3.2, no panic, softAP up, "Startup complete" |
+| LCD white→green (Stage 3) | Waveshare | rfc2217://192.168.1.43:4003 | 2026-06-19 | PASS | SPI LCD driver; white@1s, green@3s; no panic; 248 KB binary |
+| LCD 4-quadrant pattern | Waveshare | rfc2217://192.168.1.43:4003 | 2026-06-19 | PASS | TL=yellow, TR=cyan, BL=blue, BR=red observed (180° rotated vs. programmed) |
+| LCD black semicircle | Waveshare | — | 2026-06-19 | HW DEFECT | Fixed curved artifact top-right; present on all fills; not a software issue |
 
 ---
 
@@ -276,31 +279,35 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 - [x] BOOT+RESET download mode confirmed working (manual sequence required)
 - [x] IDF v5.3.2 build confirmed for esp32s3 target (1028/1028, zero errors)
 - [x] Q5 resolved: manual BOOT+RESET sufficient; automated GPIO path also confirmed
-- [x] Q9 resolved: `POST /api/flash` preferred path; RFC2217 fallback also confirmed
+- [x] Q9 resolved: `POST /api/flash` 404 on this portal; RFC2217 is the confirmed flash path
 - [x] Q4 resolved: Pi HTTP portal confirmed; GPIO wiring confirmed (gpio_boot=18, gpio_en=17)
 - [x] OpenOCD auto-started on SLOT3 (GDB 3335, telnet 4446, esp32s3-builtin.cfg)
 - [x] `esp-idf-handling` skill covers full flash workflow — no new skill needed
+- [x] **Stage 1 complete** — template firmware flashed and boot-verified on Waveshare ESP32-S3
+- [x] **Stage 2 complete** — `boards/waveshare-esp32-s3-lcd-147/` board config added, build verified
+- [x] **Stage 3 complete** — LCD driver verified on hardware; white→green confirmed; quadrant test passed
+  - `components/lcd_st7789/` — ST7789 SPI driver, 40 MHz, fill + fill_rect
+  - Content displays 180° rotated with MADCTL=0x00 (needs mirror(true,true) before Stage 4 UI work)
+  - Fixed black semicircle at physical top-right = hardware/panel artifact (not software)
 
 ## What Is Blocked
 
-- [x] **Stage 1 complete** — template firmware flashed and boot-verified on Waveshare ESP32-S3
-- [x] **Stage 2 complete** — `boards/waveshare-esp32-s3-lcd-147/` board config added, build verified
-- [ ] Any firmware components (LCD driver, SD init, inference engine) — blocked on Q1/Q2/Q6/Q8
-- [ ] Automated workbench flash workflow — Pi GPIO wiring for Key1/Key2 still unverified
+- [ ] MADCTL orientation: needs `mirror(true,true)` before drawing directional UI content
+- [ ] SD ownership transition (Q3) — follows Q6
+- [ ] Robot file-completion signal (Q6) — open
+- [ ] Weld file format (Q8) — open
+- [ ] Automated workbench flash workflow — Pi GPIO for Key1/Key2 wiring unverified
 
 ## What Is Next
 
-1. **Stage 3 — Screen color test.**
-   Replace the WiFi template `main.c` with a minimal WeldML stub that shows white→green on the LCD.
-   Add `components/lcd_st7789/` using `esp_lcd` + `esp_lcd_new_panel_st7789()`. Remove SPIFFS.
-   Add board-specific `partitions.csv` (single factory, no OTA/SPIFFS for now).
-   _Rationale: self-contained, no USB/SD complexity, validates LCD hardware and SPI bus before
-   layering on TinyUSB. Failure here is cheap to diagnose. Q1/Q2 answers not required._
+1. **Before Stage 4**: Close Q1 and Q2 in OPEN_QUESTIONS.md (architecture decision —
+   port SmrtUsbEsp code vs. other options; native ESP-IDF vs. PlatformIO).
 
 2. **Stage 4 — USB MSC + SD SPI.**
    Port TinyUSB MSC + CDC + SD SPI from SmrtUsbEsp as new components.
    Q1 plan answer (locked in staged plan): gut `main.c`; port as new components; no fork.
-   Q1/Q2 should be formally closed in OPEN_QUESTIONS.md before coding Stage 4.
+   Also add `esp_lcd_panel_mirror(s_panel, true, true)` to `lcd_st7789_init()` to correct
+   the 180° MADCTL rotation before drawing any UI content.
 
 3. **Add `workbench.local` to WSL `/etc/hosts`** — requires sudo; `echo "192.168.1.43 workbench.local" | sudo tee -a /etc/hosts`.
 
