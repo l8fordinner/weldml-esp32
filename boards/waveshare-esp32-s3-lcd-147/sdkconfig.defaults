@@ -1,0 +1,28 @@
+# Board: Waveshare ESP32-S3-LCD-1.47
+# Chip:  ESP32-S3 QFN56 rev0.2
+# Flash: 16MB Winbond W25Q128 (Quad SPI)
+# PSRAM: 8MB Octal PSRAM
+# USB:   Native USB (GPIO19/GPIO20)
+#
+# This file overrides root sdkconfig.defaults and boards/esp32-s3/sdkconfig.defaults
+# for board-specific hardware. Do not change root or esp32-s3 defaults for this board.
+
+CONFIG_BOARD_DUAL_CORE=y
+CONFIG_BOARD_HAS_BT_CLASSIC=n
+CONFIG_BOARD_HAS_BLE=y
+CONFIG_BOARD_HAS_WIFI=y
+CONFIG_BOARD_HAS_NATIVE_USB=y
+CONFIG_BOARD_HAS_ZIGBEE=n
+
+# Flash — 16MB, overrides root 4MB default (required before OTA expansion or SPIFFS > 4MB)
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+
+# PSRAM — 8MB Octal (CONFIG_SPIRAM_MODE_OCT selects OPI PSRAM on S3)
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+
+# Native USB — USB-OTG serial monitor on S3
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
