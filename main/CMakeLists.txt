@@ -9,4 +9,5 @@ idf_component_register(
     INCLUDE_DIRS "." "${BOARD_INCLUDE_DIR}"
     REQUIRES
         lcd_st7789
+        usb_msc_sd
 )

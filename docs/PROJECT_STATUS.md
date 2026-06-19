@@ -7,14 +7,82 @@ Update this at the end of each working session and commit it with the session's 
 
 ## Current State (2026-06-19)
 
-**Phase:** Stage 3 COMPLETE. LCD driver verified on hardware. Two findings documented
-(see session handoff below). Next: Stage 4 — USB MSC + SD SPI. Do not start Stage 4
-in this session.
+**Phase:** Stage 4 IN PROGRESS. Code written and CMake configured. Build not yet run
+(session stopped at 140K handoff threshold). Next action: build, flash, verify.
 
 **Branch:** `main`
-**Last committed:** (pending commit of this session's changes)
+**Last committed:** (pending — see handoff below)
 
-**Board state:** SLOT3, `weldml-esp32` running, holding green. OpenOCD active.
+**Board state:** SLOT3. Firmware from Stage 3 (green LCD) still running on hardware.
+USB Serial JTAG active (Stage 3 firmware). OpenOCD auto-started.
+
+---
+
+## Session Handoff — 2026-06-19 (Stage 4 implementation — build not yet run)
+
+**Goal:** Stage 4 — USB MSC + SD SPI. Expose SD card as USB mass storage device.
+
+**Files changed this session:**
+- `components/lcd_st7789/lcd_st7789.c` — added `esp_lcd_panel_mirror(true, true)` after
+  `esp_lcd_panel_init()` to fix 180° MADCTL rotation (deferred orientation fix from Stage 3)
+- `components/usb_msc_sd/` (NEW component):
+  - `CMakeLists.txt` — REQUIRES: driver, sdmmc, esp_tinyusb
+  - `usb_msc_sd.h` — `usb_msc_sd_config_t` (miso/mosi/clk/cs pins) + `usb_msc_sd_init()`
+  - `usb_msc_sd.c` — SPI3_HOST bus init, SDSPI host init, sdmmc_card_init, TinyUSB MSC+CDC
+  - `idf_component.yml` — `espressif/esp_tinyusb: ^1.4.2`
+- `main/main.c` — Stage 4: LCD (white→green/red) + `usb_msc_sd_init()` with board SD pins
+- `main/CMakeLists.txt` — added `usb_msc_sd` to REQUIRES
+- `main/idf_component.yml` (NEW) — `espressif/esp_tinyusb: ^1.4.2` (needed by CM)
+- `idf_component.yml` (root) — added `espressif/esp_tinyusb: ^1.4.2`
+- `boards/waveshare-esp32-s3-lcd-147/sdkconfig.defaults` — added
+  `CONFIG_TINYUSB_CDC_ENABLED=y` and `CONFIG_TINYUSB_MSC_ENABLED=y`
+- `docs/OPEN_QUESTIONS.md` — closed Q1, Q2, Q7
+- `dependencies.lock` (NEW) — component manager lock file; commit this
+
+**Q1/Q2/Q7 decisions (now closed):**
+- Q1: Port SmrtUsbEsp code as new ESP-IDF components (Option A). Done: `components/usb_msc_sd/`
+- Q2: Native ESP-IDF. In use since Stage 1.
+- Q7: `esp_lcd` + ST7789 driver. Implemented in Stage 3.
+
+**Build/flash/monitor status:**
+- `idf.py set-target esp32s3` — DONE (CMake configured, target correct)
+- `espressif/esp_tinyusb 1.7.6~2` + `espressif/tinyusb 0.19.0~3` — downloaded to
+  `managed_components/` (gitignored; `dependencies.lock` committed instead)
+- `BOARD=waveshare-esp32-s3-lcd-147 idf.py build` — NOT YET RUN (session stopped here)
+
+**Key finding — TinyUSB in ESP-IDF 5.3:**
+- `esp_tinyusb` is NOT in core ESP-IDF 5.3; must use IDF Component Manager
+- Manifest must be in COMPONENT directories (`main/idf_component.yml`,
+  `components/usb_msc_sd/idf_component.yml`) — project root alone is insufficient
+- `idf.py set-target esp32s3` needed after deleting `sdkconfig` (target is lost)
+- `CONFIG_ESP_CONSOLE_USB_CDC=y` is ROM CDC driver, incompatible with TinyUSB — do NOT use
+- Keep `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y` for early boot logs; after `tinyusb_driver_install()`,
+  USB PHY switches to OTG and JTAG logs stop. This is expected behavior.
+
+**Monitoring after Stage 4 flash (important — new procedure):**
+1. Capture boot log via `/api/serial/reset` BEFORE TinyUSB installs — SD card probe
+   info (type, size) appears in this early log via USB Serial JTAG
+2. After TinyUSB installs, USB Serial JTAG stops; verify USB MSC via Pi:
+   `ssh casey@192.168.1.43 "dmesg | tail -20"` — should show USB MSC enumeration
+   `ssh casey@192.168.1.43 "lsusb -t"` — should show CDC + mass storage
+3. LCD shows result: green = success, red = SD card probe failed
+
+**Hardware artifact notes (from Stage 3, carry forward):**
+- Black semicircle at physical top-right = fixed hardware/panel artifact, NOT software
+- Display content 180° rotated relative to USB-at-top physical orientation (now fixed in
+  `lcd_st7789.c` via `mirror(true, true)`)
+
+**Next session instructions:**
+1. Read `docs/PROJECT_STATUS.md` only.
+2. `BOARD=waveshare-esp32-s3-lcd-147 idf.py build` — should succeed; target already set.
+   If sdkconfig is missing, run `idf.py set-target esp32s3` first.
+3. Flash via `POST /api/flash` (preferred) or RFC2217 fallback.
+4. Capture boot log via `/api/serial/reset` (stop OpenOCD first for DTR/RTS path).
+5. Check Pi dmesg/lsusb for USB MSC enumeration.
+6. Confirm LCD shows green.
+7. Optionally: SSH to Pi and run `dmesg | grep usb` to verify SD card block device.
+8. Update PROJECT_STATUS.md hardware test log, commit, push.
+9. Stop on failure (do not start parser/model work, do not inspect .env).
 
 ---
 
@@ -211,8 +279,8 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 
 | Q | Title | Status | Decision | Date |
 |---|-------|--------|----------|------|
-| Q1 | Port SmrtUsbEsp or rebase around it? | **Open** | | |
-| Q2 | Native ESP-IDF or PlatformIO? | **Open** (follows Q1) | | |
+| Q1 | Port SmrtUsbEsp or rebase around it? | **Resolved** | Port as new components; no fork; `components/usb_msc_sd/` | 2026-06-19 |
+| Q2 | Native ESP-IDF or PlatformIO? | **Resolved** (follows Q1) | Native ESP-IDF; in use since Stage 1 | 2026-06-19 |
 | Q3 | SD ownership transition (MSC → firmware) | **Open** (follows Q6) | | |
 | Q4 | Pi workbench flash path for Waveshare | **Resolved** — HTTP portal + GPIO automation confirmed; `POST /api/flash` is preferred path | 2026-06-19 |
 | Q5 | Manual BOOT/RESET sufficient for early work? | **Resolved** — manual confirmed; automated GPIO path also available (gpio_boot=18, gpio_en=17) | 2026-06-19 |
@@ -292,7 +360,7 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 
 ## What Is Blocked
 
-- [ ] MADCTL orientation: needs `mirror(true,true)` before drawing directional UI content
+- [x] MADCTL orientation: `mirror(true,true)` added to `lcd_st7789.c` (Stage 4 session)
 - [ ] SD ownership transition (Q3) — follows Q6
 - [ ] Robot file-completion signal (Q6) — open
 - [ ] Weld file format (Q8) — open
@@ -300,16 +368,13 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 
 ## What Is Next
 
-1. **Before Stage 4**: Close Q1 and Q2 in OPEN_QUESTIONS.md (architecture decision —
-   port SmrtUsbEsp code vs. other options; native ESP-IDF vs. PlatformIO).
+1. **Stage 4 — complete build/flash/verify.**
+   `components/usb_msc_sd/` is implemented; CMake configured; target = esp32s3.
+   `BOARD=waveshare-esp32-s3-lcd-147 idf.py build` → flash → verify USB MSC on Pi.
+   See session handoff above for exact monitoring procedure.
 
-2. **Stage 4 — USB MSC + SD SPI.**
-   Port TinyUSB MSC + CDC + SD SPI from SmrtUsbEsp as new components.
-   Q1 plan answer (locked in staged plan): gut `main.c`; port as new components; no fork.
-   Also add `esp_lcd_panel_mirror(s_panel, true, true)` to `lcd_st7789_init()` to correct
-   the 180° MADCTL rotation before drawing any UI content.
-
-3. **Add `workbench.local` to WSL `/etc/hosts`** — requires sudo; `echo "192.168.1.43 workbench.local" | sudo tee -a /etc/hosts`.
+2. **Add `workbench.local` to WSL `/etc/hosts`** — requires sudo;
+   `echo "192.168.1.43 workbench.local" | sudo tee -a /etc/hosts`.
 
 ---
 

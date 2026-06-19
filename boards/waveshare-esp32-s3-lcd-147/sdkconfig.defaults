@@ -27,5 +27,11 @@ CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 
-# Native USB — USB-OTG serial monitor on S3
+# Native USB — USB Serial/JTAG for early-boot console (before TinyUSB installs)
+# After tinyusb_driver_install() the PHY switches to USB OTG; JTAG stops.
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# TinyUSB — CDC + MSC composite (SD card as USB mass storage)
+# espressif/esp_tinyusb ^1.4.2 required (see idf_component.yml)
+CONFIG_TINYUSB_CDC_ENABLED=y
+CONFIG_TINYUSB_MSC_ENABLED=y

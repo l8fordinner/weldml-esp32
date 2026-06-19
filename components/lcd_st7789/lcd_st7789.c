@@ -69,6 +69,9 @@ esp_err_t lcd_st7789_init(const lcd_st7789_config_t *cfg)
 
     ESP_ERROR_CHECK(esp_lcd_panel_reset(s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_init(s_panel));
+    /* MADCTL correction: content appears 180° rotated with default MADCTL=0x00.
+     * mirror_x + mirror_y is equivalent to a 180° rotation via MADCTL register. */
+    ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, true, true));
     ESP_ERROR_CHECK(esp_lcd_panel_invert_color(s_panel, true));
     ESP_ERROR_CHECK(esp_lcd_panel_set_gap(s_panel, cfg->x_gap, cfg->y_gap));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));

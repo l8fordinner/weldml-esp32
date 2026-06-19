@@ -10,19 +10,11 @@ Update this file as questions are resolved.
 **Question:** Should WeldML firmware be built by porting SmrtUsbEsp code into this
 `weldml-esp32` repo, or should `weldml-esp32` be rebased on top of the SmrtUsbEsp repo?
 
-**Context:**
-- SmrtUsbEsp already has working TinyUSB MSC + CDC, SD SPI init, and WS2812B LED on this
-  exact board with confirmed pin assignments.
-- This `weldml-esp32` repo has a more complete base template (OTA, MQTT, webserver,
-  provisioning, SPIFFS web UI, multi-board structure, partition table).
-- The MVP does not need MQTT, OTA, or web UI — but those are desired for later milestones.
-
-**Options:**
-- A: Port SmrtUsbEsp USB MSC + SD + LED code into `weldml-esp32` as new components.
-- B: Fork SmrtUsbEsp and layer the WeldML inference + LCD code on top of it.
-- C: Start fresh, referencing both repos for the relevant pieces.
-
-**Pending until:** Architecture decision session before coding begins.
+**Resolved (2026-06-19 — Stage 4):** Option A — port SmrtUsbEsp USB MSC + SD SPI
+into `weldml-esp32` as new components.  `components/usb_msc_sd/` implements TinyUSB
+CDC + MSC with SD SPI using `espressif/esp_tinyusb` managed component.  No fork or
+rebase; `weldml-esp32` retains its template structure (OTA, MQTT, webserver) for
+later milestones.  SmrtUsbEsp hardware pin assignments were the verified reference.
 
 ---
 
@@ -30,15 +22,12 @@ Update this file as questions are resolved.
 
 **Question:** Should this project use native ESP-IDF (`idf.py`) or PlatformIO?
 
-**Context:**
-- This repo (`weldml-esp32`) is built on native ESP-IDF (CMake, `idf_component.yml`,
-  Kconfig, partition CSV). See REQUIREMENTS.md for rationale.
-- SmrtUsbEsp uses PlatformIO + ESP-IDF (platformio.ini wraps idf.py).
-- PlatformIO may lag behind on ESP-IDF version support and has less Kconfig flexibility.
-- Native ESP-IDF is the more capable path for multi-target, Kconfig-gated components.
-- PlatformIO is simpler for initial setup and has good VS Code integration.
-
-**Pending until:** Q1 resolved (the answer may follow from the code base choice).
+**Resolved (2026-06-19 — Stage 4, follows Q1):** Native ESP-IDF.  The project has
+used `idf.py build / flash / monitor` since Stage 1 with no PlatformIO involvement.
+IDF 5.3.2 + IDF Component Manager provides `espressif/esp_tinyusb` for TinyUSB, which
+is the canonical path for USB MSC on ESP-IDF 5.x.  PlatformIO offers no advantage
+for this project given the multi-board board.h system and Kconfig-gated components
+already in place.
 
 ---
 
@@ -151,7 +140,9 @@ How should this be structured in firmware?
 **Decision inputs:** Build system choice (Q2) and code base choice (Q1) affect which
 driver options are compatible.
 
-**Pending until:** Q1 and Q2 resolved.
+**Resolved (2026-06-19 — Stage 3):** Option A — `esp_lcd` component with the IDF-
+bundled ST7789 panel driver (`esp_lcd_panel_st7789`).  Implemented in
+`components/lcd_st7789/` as a thin wrapper.  Hardware-confirmed on Waveshare board.
 
 ---
 
@@ -207,12 +198,12 @@ Required before: OTA expansion, SPIFFS above 4MB, or production WeldML firmware 
 
 | Q | Status | Decision | Date |
 |---|--------|----------|------|
-| Q1 | Open | | |
-| Q2 | Open | | |
+| Q1 | **Resolved** | Port SmrtUsbEsp code as new components into weldml-esp32 (Option A); no fork | 2026-06-19 |
+| Q2 | **Resolved** | Native ESP-IDF (`idf.py`); follows Q1; in use since Stage 1 | 2026-06-19 |
 | Q3 | Open | | |
 | Q4 | **Resolved** | Pi workbench HTTP portal confirmed; GPIO wiring confirmed (gpio_boot=18, gpio_en=17); automated download mode works | 2026-06-19 |
 | Q5 | **Resolved** | Manual BOOT+RESET works; automated GPIO path also confirmed; sufficient for MVP dev phase | 2026-06-19 |
 | Q6 | Open | | |
-| Q7 | Open | | |
+| Q7 | **Resolved** | `esp_lcd` component + ST7789 panel driver; implemented in `components/lcd_st7789/` | 2026-06-19 |
 | Q8 | Open | | |
 | Q9 | **Resolved** | Preferred: `POST /api/flash` (Pi-side esptool); fallback: `idf.py -p rfc2217://192.168.1.43:4003 flash` | 2026-06-19 |
