@@ -7,14 +7,15 @@ Update this at the end of each working session and commit it with the session's 
 
 ## Current State (2026-06-19)
 
-**Phase:** Stage 4 IN PROGRESS. Code written and CMake configured. Build not yet run
-(session stopped at 140K handoff threshold). Next action: build, flash, verify.
+**Phase:** Stage 4 IN PROGRESS. Build PASSED (1066/1066, 357 KB, zero errors).
+Flash blocked — workbench Pi (192.168.1.43) went offline mid-session.
+Next action: restore workbench connectivity, then flash.
 
 **Branch:** `main`
-**Last committed:** (pending — see handoff below)
+**Last committed:** f0e66c2 (Stage 4 code + CMake; build confirmed passing this session)
 
 **Board state:** SLOT3. Firmware from Stage 3 (green LCD) still running on hardware.
-USB Serial JTAG active (Stage 3 firmware). OpenOCD auto-started.
+OpenOCD stopped (via /api/debug/stop) before flash attempt. Pi offline — board state unknown.
 
 ---
 
@@ -48,7 +49,10 @@ USB Serial JTAG active (Stage 3 firmware). OpenOCD auto-started.
 - `idf.py set-target esp32s3` — DONE (CMake configured, target correct)
 - `espressif/esp_tinyusb 1.7.6~2` + `espressif/tinyusb 0.19.0~3` — downloaded to
   `managed_components/` (gitignored; `dependencies.lock` committed instead)
-- `BOARD=waveshare-esp32-s3-lcd-147 idf.py build` — NOT YET RUN (session stopped here)
+- `BOARD=waveshare-esp32-s3-lcd-147 idf.py build` — **PASS** (1066/1066, 357 KB, zero errors, 2026-06-19)
+- Flash — **BLOCKED** this session: workbench Pi went offline. Port 4003 RFC2217 returned
+  "timeout while waiting for option 'purge'" then Pi became unreachable. Not a firmware issue.
+- `POST /api/flash` — confirmed 404 on this portal (same as Q9 resolution; use RFC2217 fallback)
 
 **Key finding — TinyUSB in ESP-IDF 5.3:**
 - `esp_tinyusb` is NOT in core ESP-IDF 5.3; must use IDF Component Manager
@@ -74,15 +78,26 @@ USB Serial JTAG active (Stage 3 firmware). OpenOCD auto-started.
 
 **Next session instructions:**
 1. Read `docs/PROJECT_STATUS.md` only.
-2. `BOARD=waveshare-esp32-s3-lcd-147 idf.py build` — should succeed; target already set.
-   If sdkconfig is missing, run `idf.py set-target esp32s3` first.
-3. Flash via `POST /api/flash` (preferred) or RFC2217 fallback.
-4. Capture boot log via `/api/serial/reset` (stop OpenOCD first for DTR/RTS path).
-5. Check Pi dmesg/lsusb for USB MSC enumeration.
-6. Confirm LCD shows green.
-7. Optionally: SSH to Pi and run `dmesg | grep usb` to verify SD card block device.
-8. Update PROJECT_STATUS.md hardware test log, commit, push.
-9. Stop on failure (do not start parser/model work, do not inspect .env).
+2. **Build already passed** — skip build step.
+3. Verify workbench is back: `curl -s http://192.168.1.43:8080/api/info`
+4. Check SLOT3 state: `curl -s http://192.168.1.43:8080/api/devices | python3 -m json.tool`
+5. If OpenOCD is running, stop it: `curl -X POST http://192.168.1.43:8080/api/debug/stop -H 'Content-Type: application/json' -d '{"slot": "SLOT3"}'`
+6. Flash via RFC2217 (POST /api/flash is 404 on this portal):
+   ```
+   cd /mnt/j/ReposWSL/weldml-esp32 && source ~/esp/esp-idf/export.sh && idf.py -p rfc2217://192.168.1.43:4003 flash
+   ```
+7. Capture boot log via `/api/serial/reset` (while OpenOCD is still stopped — DTR/RTS path):
+   ```
+   curl -X POST http://192.168.1.43:8080/api/serial/reset -H 'Content-Type: application/json' -d '{"slot": "SLOT3"}' | python3 -m json.tool
+   ```
+8. Check Pi dmesg/lsusb for USB MSC enumeration:
+   ```
+   ssh casey@192.168.1.43 "dmesg | tail -20"
+   ssh casey@192.168.1.43 "lsusb -t"
+   ```
+9. Confirm LCD shows green (or red if SD card probe failed).
+10. Update PROJECT_STATUS.md hardware test log, commit, push.
+11. Stop on failure (do not start parser/model work, do not inspect .env).
 
 ---
 
@@ -312,6 +327,7 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 | LCD white→green (Stage 3) | Waveshare | rfc2217://192.168.1.43:4003 | 2026-06-19 | PASS | SPI LCD driver; white@1s, green@3s; no panic; 248 KB binary |
 | LCD 4-quadrant pattern | Waveshare | rfc2217://192.168.1.43:4003 | 2026-06-19 | PASS | TL=yellow, TR=cyan, BL=blue, BR=red observed (180° rotated vs. programmed) |
 | LCD black semicircle | Waveshare | — | 2026-06-19 | HW DEFECT | Fixed curved artifact top-right; present on all fills; not a software issue |
+| idf.py build (Stage 4) | Waveshare (WSL build) | — | 2026-06-19 | PASS | 1066/1066, 357 KB, zero errors; usb_msc_sd + esp_tinyusb 1.7.6 linked |
 
 ---
 
@@ -368,10 +384,10 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 
 ## What Is Next
 
-1. **Stage 4 — complete build/flash/verify.**
-   `components/usb_msc_sd/` is implemented; CMake configured; target = esp32s3.
-   `BOARD=waveshare-esp32-s3-lcd-147 idf.py build` → flash → verify USB MSC on Pi.
-   See session handoff above for exact monitoring procedure.
+1. **Stage 4 — flash and verify (build already done).**
+   `BOARD=waveshare-esp32-s3-lcd-147 idf.py build` PASSED (1066/1066, 357 KB).
+   Workbench Pi offline blocked flash — restore connectivity and flash via RFC2217.
+   See session handoff above for exact procedure (steps 3–10).
 
 2. **Add `workbench.local` to WSL `/etc/hosts`** — requires sudo;
    `echo "192.168.1.43 workbench.local" | sudo tee -a /etc/hosts`.
