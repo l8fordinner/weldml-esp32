@@ -1,5 +1,7 @@
 # Claude Code — local dev context, not for forks
 CLAUDE.md
+.claude/settings.json
+.claude/*.local.md
 
 # ESP-IDF build output
 build/
