@@ -42,17 +42,27 @@ Board MAC: `98:3d:ae:e4:4e:ac`
 | Pi workbench reachable | PASS | `ssh casey@192.168.1.43` via key auth from WSL |
 | Board enumeration on Pi — CDC | PASS | `/dev/ttyACM0` visible in SmrtUsbEsp run mode |
 | Board enumeration on Pi — MSC | PASS | `sda` / `sda1` (29 GiB SD card) via `lsblk`; TinyUSB Flash Storage 0.2 |
-| BOOT+RESET enters download mode | PASS | Manual button sequence required and confirmed working |
-| No auto-reset circuit | CONFIRMED | DTR/RTS do not trigger reset; button hold is required each flash cycle |
+| BOOT+RESET enters download mode | PASS | Manual button sequence confirmed; automated via GPIO also available (see below) |
+| Pi GPIO wiring — BOOT (gpio_boot=18) | CONFIRMED | Pi GPIO18 → Key1 (BOOT/GPIO0); verified via `/api/devices` SLOT3 |
+| Pi GPIO wiring — EN (gpio_en=17) | CONFIRMED | Pi GPIO17 → Key2 (EN/RST); verified via `/api/devices` SLOT3 |
 | Download mode USB enumeration | PASS | idVendor=303a, idProduct=1001 (USB JTAG/serial debug unit, Espressif) |
 | Chip: ESP32-S3 QFN56 rev0.2 | PASS | Verified via `esptool chip-id` (from Pi) |
 | PSRAM: 8MB embedded (AP_3v3) | PASS | Verified via esptool features line |
 | Flash: 16MB Winbond W25Q128 | PASS | Verified via `esptool flash-id`: manufacturer=ef, device=4018, 3.3V quad SPI |
 | Crystal: 40MHz | PASS | Verified via esptool |
 | WSL ESP-IDF v5.3.2 | PASS | `idf.py --version` after sourcing `~/esp/esp-idf/export.sh` |
-| Pi ESP-IDF | NOT INSTALLED | Flash must run from WSL; Pi does not have IDF |
+| Pi ESP-IDF | NOT INSTALLED | Pi-side esptool used via `POST /api/flash`; WSL IDF only needed for build |
+| Pi workbench HTTP portal | CONFIRMED | `http://192.168.1.43:8080/api/info` returns host_ip, slots_configured=3 |
+| Waveshare assigned to SLOT3 | CONFIRMED | `/api/devices`: state=idle, devnode=/dev/ttyACM0, url=rfc2217://192.168.1.43:4003 |
+| OpenOCD auto-started (SLOT3) | CONFIRMED | debugging=true, debug_chip=esp32s3, gdb_port=3335, telnet=4446 |
 | Build for esp32s3 target | PASS | `idf.py build` — 1028/1028 targets, zero errors, zero warnings |
-| Flash | NOT RUN | Awaiting explicit approval; Q9 (WSL→Pi path) still unresolved |
+| Flash | NOT RUN | Awaiting explicit approval; all technical blockers cleared |
+
+**Flash path (confirmed 2026-06-19):** Use `POST http://192.168.1.43:8080/api/flash` with
+multipart `flash_args` + .bin files. Portal (portal.py on Pi) drives GPIO18/17 to enter
+download mode automatically before calling esptool against `/dev/ttyACM0`. No manual
+BOOT+RESET required. Add `/etc/hosts` entry `192.168.1.43 workbench.local` in WSL for
+skill-compatible hostnames.
 
 **Flash size note:** Build uses `--flash_size 4MB` (from root `sdkconfig.defaults`).
 Physical flash is 16MB (Winbond W25Q128). This is **not a blocker for a first smoke-test
@@ -63,9 +73,6 @@ will boot and run correctly. The correct fix is to create
 `CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y` as part of board-specific setup (blocked on Q1/Q2).
 Do not change root `sdkconfig.defaults` or `boards/esp32-s3/sdkconfig.defaults`.
 Required before: OTA layout expansion, SPIFFS growth above 4MB, or real WeldML firmware deployment.
-
-**Known issue — flash path:** Pi does not have ESP-IDF. WSL→Pi flashing path not yet
-established. RFC2217 serial proxy on Pi not yet verified. See OPEN_QUESTIONS.md Q9.
 
 ---
 

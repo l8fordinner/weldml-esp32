@@ -85,13 +85,14 @@ Waveshare ESP32-S3-LCD-1.47?
 - Voltage and polarity compatibility with 3.3 V pull-up on Key1/Key2.
 - Review Universal Embedded Workbench repo wiring documentation.
 
-**Partially resolved (2026-06-19):**
+**Resolved (2026-06-19):**
 - Pi workbench confirmed reachable at 192.168.1.43 (`casey@PiEspWrkbench`).
-- Board enumerates on Pi as `/dev/ttyACM0` and MSC `sda` in run mode.
-- In download mode (after manual BOOT+RESET), `esptool chip-id` and `flash-id` run cleanly from Pi.
-- esptool v5.2.0 is installed on the Pi; ESP-IDF is not.
-- **Remaining unresolved:** WSL→Pi flash path not yet established. See Q9.
-- Pi GPIO wiring for automated BOOT+RESET: not yet verified.
+- Board enumerates on Pi as `/dev/ttyACM0` in SLOT3 (`state: idle`).
+- Full workbench HTTP portal confirmed: `http://192.168.1.43:8080/api/info` → `slots_configured=3`.
+- Pi GPIO wiring confirmed: `gpio_boot=18` (→ Key1/BOOT/GPIO0), `gpio_en=17` (→ Key2/EN/RST).
+- Automated download mode entry via `POST /api/gpio/set` is available; no manual BOOT+RESET required for flash.
+- WSL→Pi flash path: `POST /api/flash` (Pi-side esptool). See Q9.
+- OpenOCD auto-started on SLOT3: `debug_chip=esp32s3`, GDB port 3335, telnet 4446.
 
 ---
 
@@ -191,7 +192,14 @@ chip's upper 12MB is simply unused at runtime. Correct fix is to add
 Do not change root `sdkconfig.defaults` or `boards/esp32-s3/sdkconfig.defaults`.
 Required before: OTA expansion, SPIFFS above 4MB, or production WeldML firmware deployment.
 
-**Pending until:** RFC2217 status on Pi checked, or alternative path confirmed working.
+**Resolved (2026-06-19):**
+- Full workbench HTTP portal running at `http://192.168.1.43:8080`.
+- Waveshare board on SLOT3: `url=rfc2217://192.168.1.43:4003`, `devnode=/dev/ttyACM0`, `state=idle`.
+- Preferred flash path: `POST /api/flash` with multipart `flash_args` + .bin files. Portal runs esptool
+  on the Pi directly, handles GPIO download mode automatically (gpio_boot=18, gpio_en=17).
+- Fallback: `idf.py -p rfc2217://192.168.1.43:4003 flash` from WSL (confirmed working via chip_id test).
+- Monitor: `idf.py -p rfc2217://192.168.1.43:4003 monitor` from WSL.
+- Hostname alias needed in WSL `/etc/hosts`: `192.168.1.43 workbench.local`.
 
 ---
 
@@ -202,9 +210,9 @@ Required before: OTA expansion, SPIFFS above 4MB, or production WeldML firmware 
 | Q1 | Open | | |
 | Q2 | Open | | |
 | Q3 | Open | | |
-| Q4 | Partial | Pi USB access + chip-id confirmed; WSL→Pi flash path unresolved (see Q9) | 2026-06-19 |
-| Q5 | **Resolved** | Manual BOOT+RESET works; sufficient for MVP dev phase | 2026-06-19 |
+| Q4 | **Resolved** | Pi workbench HTTP portal confirmed; GPIO wiring confirmed (gpio_boot=18, gpio_en=17); automated download mode works | 2026-06-19 |
+| Q5 | **Resolved** | Manual BOOT+RESET works; automated GPIO path also confirmed; sufficient for MVP dev phase | 2026-06-19 |
 | Q6 | Open | | |
 | Q7 | Open | | |
 | Q8 | Open | | |
-| Q9 | Open | | |
+| Q9 | **Resolved** | Preferred: `POST /api/flash` (Pi-side esptool); fallback: `idf.py -p rfc2217://192.168.1.43:4003 flash` | 2026-06-19 |
