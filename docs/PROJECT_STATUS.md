@@ -7,11 +7,59 @@ Update this at the end of each working session and commit it with the session's 
 
 ## Current State (2026-06-19)
 
-**Phase:** Pre-implementation — hardware validation complete. No firmware code written yet.
+**Phase:** Pre-implementation — hardware validation and workbench path verification complete.
+No firmware code written. First smoke-test flash is now unblocked (awaiting explicit approval).
 Firmware work still blocked on Q1 and Q2 (codebase and build system strategy).
 
-**Branch:** `main` (up to date after operating-setup and model-export commits)
-**Last committed:** `2e557f8` "Add project operating and context policies"
+**Branch:** `main`
+**Last committed:** `791f348` "Reclassify 4MB flash size as non-blocking for smoke-test flash"
+
+**Board state at session end:** Board may be in download mode (USB JTAG/serial debug unit).
+Press RST (Key2) to return to SmrtUsbEsp run mode before next session.
+
+---
+
+## Session Handoff — 2026-06-19
+
+**Goal this session:** Verify WSL-to-Pi flash/monitor path (Q9).
+
+**Completed:**
+- Confirmed `rfc2217-portal` service running on Pi since boot (systemd, auto-starts)
+- `plain_rfc2217_server.py -p 4003 /dev/ttyACM0` auto-spawned when board connected
+- Port 4003 confirmed listening on 0.0.0.0 (accessible from WSL)
+- WSL→Pi RFC2217 connection test: `esptool.py --port rfc2217://192.168.1.43:4003 chip_id` succeeded
+- OpenOCD also running on Pi: GDB port 3335, telnet port 4446 (`esp32s3-builtin.cfg`)
+
+**Q9 result: Resolved.** RFC2217 on port 4003 is the confirmed flash/monitor path from WSL.
+
+**First smoke-test flash: unblocked.** Only remaining gate is explicit user approval.
+
+**Exact commands for first flash (do not run until approved):**
+```bash
+# Step 1 — build (WSL)
+. ~/esp/esp-idf/export.sh && cd /mnt/j/ReposWSL/weldml-esp32 && idf.py build
+
+# Step 2 — enter download mode (physical: hold Key1, tap Key2, release Key1)
+
+# Step 3 — flash (WSL via RFC2217)
+. ~/esp/esp-idf/export.sh && idf.py -p rfc2217://192.168.1.43:4003 flash
+
+# Step 4 — monitor (WSL via RFC2217, board in run mode)
+. ~/esp/esp-idf/export.sh && idf.py -p rfc2217://192.168.1.43:4003 monitor
+# Exit monitor: Ctrl+]
+```
+
+**Files changed this session (not yet committed):**
+- `docs/PROJECT_STATUS.md` — this file (handoff + Q9 result)
+- No source files modified
+
+**Verification status:**
+- RFC2217 connection: verified ✓
+- Flash: NOT RUN — awaiting approval
+- Monitor: NOT RUN — awaiting approval
+- OpenOCD/JTAG: present but not tested from WSL
+
+**Next action:** Say "approve first flash" to proceed, or resolve Q1/Q2 for firmware work.
 
 ---
 
@@ -24,7 +72,7 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 | Q1 | Port SmrtUsbEsp or rebase around it? | **Open** | | |
 | Q2 | Native ESP-IDF or PlatformIO? | **Open** (follows Q1) | | |
 | Q3 | SD ownership transition (MSC → firmware) | **Open** (follows Q6) | | |
-| Q4 | Pi workbench flash path for Waveshare | **Partial** — USB + chip-id confirmed; WSL→Pi flash path unresolved (Q9) | 2026-06-19 |
+| Q4 | Pi workbench flash path for Waveshare | **Resolved** — RFC2217 port 4003 confirmed; see Q9 | 2026-06-19 |
 | Q5 | Manual BOOT/RESET sufficient for early work? | **Resolved** — confirmed working; required (no auto-reset circuit) | 2026-06-19 |
 | Q6 | Robot file-completion signal | **Open** | | |
 | Q7 | LCD driver structure | **Open** (follows Q1/Q2) | | |
@@ -49,7 +97,7 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 | chip-id (esptool) | Waveshare | /dev/ttyACM0 (Pi) | 2026-06-19 | PASS | ESP32-S3 QFN56 rev0.2, 8MB PSRAM, MAC 98:3d:ae:e4:4e:ac |
 | flash-id (esptool) | Waveshare | /dev/ttyACM0 (Pi) | 2026-06-19 | PASS | 16MB Winbond W25Q128 (ef/4018), 3.3V quad SPI |
 | idf.py build (esp32s3) | Waveshare (WSL build) | — | 2026-06-19 | PASS | IDF v5.3.2, 1028/1028 targets, zero errors |
-| idf.py flash | Waveshare | — | — | NOT RUN | Blocked on Q9 (WSL→Pi path); flash size at 4MB is safe for smoke test |
+| idf.py flash | Waveshare | — | — | NOT RUN | Q9 resolved; awaiting explicit approval |
 
 ---
 
@@ -62,7 +110,7 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 | Pi sees Waveshare MSC (sda) | **Confirmed** — 29 GiB SD card via TinyUSB MSC |
 | esptool on Pi | **Confirmed** — v5.2.0 at /usr/local/bin/esptool.py |
 | ESP-IDF on Pi | **Not installed** — flash must run from WSL |
-| WSL→Pi flash path (RFC2217 or other) | **Unverified** — see Q9 |
+| WSL→Pi flash path (RFC2217 or other) | **Confirmed** — RFC2217 port 4003 (`plain_rfc2217_server.py`); `esptool` chip_id tested successfully from WSL |
 | Pi boot/reset GPIO wiring for Waveshare | **Unverified** — do not assume HUZZAH32 wiring applies |
 | Manual BOOT+RESET sequence | **Confirmed working** — hold Key1, tap Key2, release Key1 |
 | UDP log capture on Waveshare | **Not yet verified** |
@@ -81,20 +129,21 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 - [x] BOOT+RESET download mode confirmed working (manual sequence required)
 - [x] IDF v5.3.2 build confirmed for esp32s3 target (1028/1028, zero errors)
 - [x] Q5 resolved: manual BOOT+RESET sufficient for MVP dev phase
+- [x] Q9 resolved: RFC2217 port 4003 confirmed as WSL→Pi flash/monitor path
+- [x] OpenOCD confirmed running on Pi (GDB 3335, telnet 4446, esp32s3-builtin.cfg)
 
 ## What Is Blocked
 
-- [ ] **First flash** — blocked only on Q9 (WSL→Pi flash path); 4MB flash size is safe for smoke test
+- [ ] **First flash** — awaiting explicit approval only; all technical blockers cleared
 - [ ] `boards/waveshare-esp32-s3-lcd-147/` board config — blocked on Q1/Q2
 - [ ] Any firmware components (LCD driver, SD init, inference engine) — blocked on Q1/Q2/Q6/Q8
-- [ ] Automated workbench flash workflow — blocked on Q9 + Pi GPIO wiring (unverified)
+- [ ] Automated workbench flash workflow — Pi GPIO wiring for Key1/Key2 still unverified
 
 ## What Is Next
 
-1. **Resolve Q9** — verify RFC2217 proxy on Pi (`ps aux | grep rfc2217`) or choose alternate flash path.
-2. **First flash of Waveshare board** — after Q9 resolved; requires explicit approval.
-3. **Resolve Q1 and Q2** — codebase strategy and build system decision; blocks all firmware components.
-4. **Create board config** `boards/waveshare-esp32-s3-lcd-147/` once Q1/Q2 resolved — include `CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y` to fix flash size correctly.
+1. **First flash of Waveshare board** — say "approve first flash"; use `idf.py -p rfc2217://192.168.1.43:4003 flash` after BOOT+RESET.
+2. **Resolve Q1 and Q2** — codebase strategy and build system decision; blocks all firmware components.
+3. **Create board config** `boards/waveshare-esp32-s3-lcd-147/` once Q1/Q2 resolved — include `CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y` to fix flash size correctly.
 
 ---
 
