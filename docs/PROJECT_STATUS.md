@@ -8,14 +8,110 @@ Update this at the end of each working session and commit it with the session's 
 ## Current State (2026-06-19)
 
 **Phase:** Stage 5 IN PROGRESS. Build and flash complete. LCD shows CYAN (WAITING state).
-TinyUSB not switching USB PHY from 303a:1001 → 303a:4003 — investigation needed.
+TinyUSB not switching USB PHY from 303a:1001 → 303a:4003 — diagnosis done, boot log blocked.
 
 **Branch:** `main`  
-**Last committed:** `e204d05` (Stage 4 complete)  
-**Working tree:** DIRTY — Stage 5 changes unstaged (see handoff below)
+**Last committed:** `d1c0587` (Stage 5 implementation — write-idle handoff, LCD states, handoff docs)  
+**Working tree:** CLEAN
 
-**Board state:** SLOT3. Stage 5 firmware flashed (2026-06-19). USB shows 303a:1001 (USB JTAG/serial);
-TinyUSB NOT enumerating as 303a:4003 despite LCD showing CYAN. Requires investigation.
+**Board state:** SLOT3. Stage 5 firmware flashed (2026-06-19). USB stably at 303a:1001.
+Device is NOT crash-looping (single stable 303a:1001 enumeration, no repeated USB events in dmesg).
+TinyUSB PHY switch (`usb_new_phy()` → 303a:4003) never happens after Stage 5 boot.
+Stage 4 firmware WAS running as 303a:4003 before the Stage 5 flash (confirmed from dmesg at Pi boot).
+
+---
+
+## Session Handoff — 2026-06-19 (Stage 5 — TinyUSB enumeration diagnosis, boot log blocked)
+
+**Goal:** Diagnose and fix TinyUSB PHY switch failure (303a:1001 stays instead of 303a:4003).
+
+**Changes this session:** None — read-only investigation. Working tree remains clean.
+
+**Build status:** PASS from previous session (d1c0587). No rebuild needed unless code is changed.
+
+**Flash status:** Stage 5 already flashed. Board is running d1c0587 firmware.
+
+**USB enumeration status:** STILL FAIL — USB stays at 303a:1001. Confirmed with lsusb and dmesg:
+- Pi boot shows Stage 4 was at 303a:4003 (device 5)
+- Stage 5 flash at t=1074s: device 5 reset/disconnect → device 6 as 303a:1001
+- NO further USB events in dmesg after t=1074; no 303a:4003 ever appeared
+- Device is stably at 303a:1001 (NOT crash-looping — crash loop would show repeated USB events)
+
+**Diagnostic findings:**
+
+1. **Device is stable at CYAN, not crash-looping.**
+   - No repeated USB reconnects in dmesg
+   - No serial output (expected: app_main in vTaskDelay, monitor_task blocked on s_write_seen=false)
+   - This rules out crash loop as the cause of the stuck 303a:1001
+
+2. **USB JTAG OpenOCD fails with `libusb_get_string_descriptor_ascii() failed with -1`.**
+   - OpenOCD can see the device (VID=303a PID=1001, capabilities=0x2000) but fails on string descriptor
+   - This suggests USB JTAG vendor-specific communication is impaired on the running device
+   - Possible explanation: `usb_new_phy()` partially switched the PHY, disabling JTAG vendor strings
+     but not completing OTG enumeration — leaving device in a state where JTAG appears functional
+     to the kernel (cdc_acm claims ttyACM0 for serial) but JTAG debug protocol is broken
+   - Attempted cdc_acm unbind + sudo OpenOCD — same failure
+
+3. **All TinyUSB symbols are present and correctly resolved in the ELF:**
+   - `tinyusb_driver_install` at 0x4200a420 ✓
+   - `usb_new_phy` at 0x4200f560 ✓
+   - `tud_msc_write10_complete_cb` at 0x42008f64 (our override from weld_processor.c) ✓
+   - `tusb_rhport_init` at 0x42011970 (tusb_init() macro resolves to this) ✓
+   - `CFG_TUD_ENABLED` is set (device mode active) ✓
+   - No duplicate or conflicting symbol resolution
+
+4. **Partition table is correct.** Board-specific partitions.csv has factory at 0x10000, matching
+   flasher_args.json. Stage 5 was correctly written at 0x10000.
+
+5. **Cannot capture boot log without manual button press.**
+   - Board has no auto-reset circuit (DTR/RTS on ttyACM0 does not reset chip)
+   - `/api/serial/reset` returns `ok: true` but triggers no USB events (confirmed via dmesg)
+   - DTR assertion via Python pyserial also confirms no reset occurs
+   - Need user to press Key1+Key2 for download mode → flash with added logging → Key2 to boot
+
+6. **`tud_msc_write10_complete_cb` override is clean.** TinyUSB's `msc_device.c` has it as
+   `TU_ATTR_WEAK`; our strong override in weld_processor.c correctly wins. tusb_msc_storage.c
+   does NOT define this callback. No linker conflict.
+
+**Root cause hypothesis (unconfirmed):**
+`usb_new_phy()` is being called (LCD reaches CYAN, meaning tinyusb_driver_install returned OK),
+but the USB PHY switch is either:
+a) Failing silently after returning OK (USB JTAG partially disabled, OTG not enabled), OR
+b) Completing the PHY switch but TinyUSB task fails to enumerate before the host gives up, causing
+   the device to reset and re-appear as 303a:1001 (but this would show repeated USB events in dmesg,
+   which we do NOT see)
+
+Hypothesis (a) is most consistent with the evidence. The OpenOCD string descriptor failure at -1
+while cdc_acm serial still works suggests a partial JTAG/OTG state.
+
+**What would confirm or deny this:** Boot log from USB JTAG console. The last JTAG-visible log
+line is "USB MSC+CDC ready" (after tinyusb_driver_install returns). If that line appears in the
+boot log AND dmesg shows no subsequent PHY switch event, the PHY switch is the bug.
+
+**Next session instructions:**
+1. Read `docs/PROJECT_STATUS.md` only.
+2. Add `ESP_LOGI(TAG, "Calling tinyusb_driver_install...")` before `tinyusb_driver_install()` in
+   `components/usb_msc_sd/usb_msc_sd.c` (line 87, after the mount call).
+3. Build: `cd /mnt/j/ReposWSL/weldml-esp32 && source ~/esp/esp-idf/export.sh && idf.py -D BOARD=waveshare-esp32-s3-lcd-147 build`
+4. SCP binaries to Pi: `scp build/bootloader/bootloader.bin build/partition_table/partition-table.bin build/weldml-esp32.bin casey@192.168.1.43:/tmp/`
+5. **ASK USER to press Key1+Key2** on the board → device enters download mode (303a:1001 with ttyACM0)
+6. Flash from Pi: `ssh casey@192.168.1.43 "python3 -m esptool --chip esp32s3 -p /dev/ttyACM0 -b 460800 --before=no-reset --after=no-reset write-flash --flash-mode dio --flash-freq 80m --flash-size 16MB 0x0 /tmp/bootloader.bin 0x10000 /tmp/weldml-esp32.bin 0x8000 /tmp/partition-table.bin"`
+   **Use `--after=no-reset` this time** so device stays in download mode after flash.
+7. Start reading serial in background on Pi: `ssh casey@192.168.1.43 "python3 -c 'import serial,time; s=serial.Serial(\"/dev/ttyACM0\",115200,timeout=0.2); [print(s.read(2048).decode(errors=\"replace\"), end=\"\") for _ in range(50)]'" > /tmp/boot_log.txt &`
+8. **ASK USER to press Key2 alone** (no Key1) → device boots → captures boot log
+9. Wait ~5s, then `cat /tmp/boot_log.txt` to see the log
+10. In dmesg, check if 303a:4003 appears after the Key2 boot: `ssh casey@192.168.1.43 "dmesg | tail -15"`
+11. **If boot log shows "Calling tinyusb_driver_install..." but no 303a:4003 in dmesg:**
+    → PHY switch IS being called but doesn't complete. Check if `usb_new_phy()` needs explicit
+      USB Serial JTAG deinit before calling. Check ESP-IDF 5.3.2 known issues.
+12. **If no "Calling tinyusb_driver_install..." in log:**
+    → Something before tinyusb_driver_install fails. Check which earlier function panics or returns error.
+13. Do NOT start Stage 6. Do NOT inspect .env.
+
+**Alternative to boot log: add `tinyusb_driver_install` return value logging via UART0.**
+ESP32-S3 UART0 is on GPIO43(TX)/GPIO44(RX). If USB JTAG console goes dark after PHY switch, add
+`uart_write_bytes(UART_NUM_0, msg, len)` AFTER tinyusb_driver_install returns to see if it returned
+OK. Requires a USB-TTL adapter connected to GPIO43/44. Not available in current setup.
 
 ---
 
@@ -416,6 +512,8 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 | idf.py flash (Stage 5) | Waveshare | SSH esptool on Pi | 2026-06-19 | PASS | SHA-verified; --before=no-reset after manual Key1+Key2 |
 | LCD CYAN (Stage 5) | Waveshare | — | 2026-06-19 | PASS | weld_processor_start() called; WAITING state confirmed |
 | TinyUSB enumeration (Stage 5) | Waveshare | Pi USB | 2026-06-19 | **FAIL** | USB stays 303a:1001; expected 303a:4003; PHY not switching to OTG |
+| USB stable (no crash loop) | Waveshare | Pi dmesg | 2026-06-19 | CONFIRMED | 303a:1001 single stable enum, no repeated reconnects → device is NOT crash-looping |
+| OpenOCD JTAG via esp_usb_jtag | Waveshare | Pi USB | 2026-06-19 | **FAIL** | libusb_get_string_descriptor_ascii()=-1; JTAG vendor strings inaccessible on running Stage 5 fw |
 
 ---
 
