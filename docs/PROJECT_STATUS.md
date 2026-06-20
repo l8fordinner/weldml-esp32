@@ -7,7 +7,7 @@ Update this at the end of each working session and commit it with the session's 
 
 ## Current State (2026-06-20)
 
-**Phase:** Stage 6A COMPLETE. Parser component implemented, all tests pass, firmware builds clean. Stage 6B blocked on Q10.
+**Phase:** Stage 6A COMPLETE. Q10 partially resolved — signal column and two feature formulas confirmed; parity gap and two formulas still block Stage 6B.
 
 **Confirmed this session (2026-06-20, Stage 5 fix + verification):**
 
@@ -48,6 +48,76 @@ USB enumerating as `303a:4003`. SD card visible as sda1.
 
 **Active flash path:** Direct-PC USB via usbipd-win (confirmed working). Pi RFC2217 path NOT re-tested
 this session (no flash needed — firmware unchanged). Pi path may now work after reboot, unverified.
+
+---
+
+## Session Handoff — 2026-06-20 (Q10 partial resolution — handoff at context limit)
+
+**Goal:** Inspect `model_exports/esp32_port/feature_extraction.py` to resolve Q10 before Stage 6B.
+
+**Branch:** `main`
+**Last commit:** `0f8aff9` (Stage 6A complete)
+**Working tree:** DIRTY (Q10 doc updates only — no code changes)
+
+**What was done this session:**
+
+1. Read `docs/PROJECT_STATUS.md` to establish context.
+2. Inspected `model_exports/esp32_port/feature_extraction.py` — the exported trainer feature extraction code.
+3. Inspected `FEATURE_SCHEMA.json`, `PREPROCESSING.json`, `golden_vectors/golden_vectors.json`, `PORTING_NOTES.md`, `PACKAGE_MANIFEST.json`, `REPRODUCTION_COMMANDS.md`, `MODEL_SELECTION.md`.
+4. Cross-checked golden vector feature values against actual FSJ fixture data (l314.fsj).
+
+**Q10 partial findings:**
+
+**CONFIRMED:**
+- Signal for time-domain/FFT/CWT: **LOADCELL (col 1)** — feature_extraction.py module docstring: "weld LOADCELL signals". `load_values` parameter = LOADCELL column.
+- Time values: **TIME (col 0)** passed as `time_values` parameter.
+- **RotationSpeed** = footer ROTATE value (e.g., `STAGE 3 ... ROTATE = 1800.00`). VEL8 × 100 gives non-integer values (~1797-1803); footer gives exact integers matching golden exactly.
+- **MinPositionStage3** = min(POS7) where STAGE==3 (col 7, 0-indexed). Cross-checked: POS7 min during STAGE==3 in l314.fsj = 2.2900. Golden = 2.29. **Exact match.**
+
+**CRITICAL UNRESOLVED — parity gap:**
+- Raw LOADCELL in the parser window does NOT reproduce golden time-domain values:
+  - Mean: computed=12.679, golden=12.947 (delta −0.268)
+  - PeakValue: computed=14.730, golden=16.44 (delta −1.710)
+  - RMS: computed=12.801, golden=13.077 (delta −0.276)
+- No FSJ column gives mean≈12.947 AND peak≈16.44 with the current window definition.
+- Root cause unknown — likely `parse_and_clean` applies preprocessing NOT in feature_extraction.py.
+
+**STILL UNRESOLVED:**
+- `MaxForceBelow3mm` formula — "below 3mm" position column not confirmed.
+- `PlungeVelocity` formula — not in feature_extraction.py; must be in parse_and_clean.
+- Signal parity — preprocessing between raw LOADCELL and feature input.
+
+**Stage 5 status:** COMPLETE. Unchanged.
+**Stage 6A status:** COMPLETE. Unchanged.
+**Stage 6B:** Still BLOCKED. Q10 partially resolved but parity gap and two feature formulas unresolved.
+
+**Next action:**
+Read `weldmltrainer/parse_and_clean.py` (if available). If not in this repo, attempt golden-vector reverse engineering to find preprocessing step that shifts mean from 12.679 to 12.947 and peak from 14.730 to 16.44.
+
+**Next prompt for a fresh session:**
+```
+Read docs/PROJECT_STATUS.md and docs/OPEN_QUESTIONS.md Q10 section.
+
+Q10 is PARTIALLY resolved. Stage 6B is still blocked by the parity gap.
+
+The new key finding (2026-06-20):
+- feature_extraction.py confirms LOADCELL (col 1) as load_values.
+- But raw LOADCELL in the parser window gives mean=12.679, peak=14.730 vs golden mean=12.947, peak=16.44.
+- MinPositionStage3 = min(POS7 col 7) where STAGE==3 is confirmed.
+- RotationSpeed = footer ROTATE value is confirmed.
+- MaxForceBelow3mm and PlungeVelocity formulas are unknown.
+
+Task: Resolve the parity gap and remaining formulas before Stage 6B.
+Options to try:
+1. Check if weldmltrainer/parse_and_clean.py exists anywhere in this repo.
+2. Try applying the feature_extraction.py FFT padding logic (FFT_PAD_LENGTH=4096) to compute features in Python and compare to golden.
+3. Try different window variants (e.g., STAGE 2 only; STAGE 2+3; just STAGE 3) against the golden Mean/Peak.
+4. For MaxForceBelow3mm: try max(LOADCELL) where POS7 < 3.0 (since POS7 is confirmed as the position column).
+5. For PlungeVelocity: try mean(VEL8), max(VEL8), or VEL7 during window.
+
+Do NOT implement Stage 6B until Q10 is fully closed.
+Do NOT inspect .env.
+```
 
 ---
 

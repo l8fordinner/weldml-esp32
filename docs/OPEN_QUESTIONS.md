@@ -277,21 +277,82 @@ Required before: OTA expansion, SPIFFS above 4MB, or production WeldML firmware 
 
 **Question:** Which FSJ data column (or footer field) is the primary signal source for each of the 22 model features?
 
-**Context:**
-- Q8 closed for file format/structure. The 16 FSJ column names are confirmed.
-- `FEATURE_SCHEMA.json` describes features by purpose ("time-domain mean", "FFT bandwidth", etc.) but does not name the source FSJ column.
-- `RotationSpeed` in golden vectors is exactly 1400.0 or 1800.0 — consistent with `ROTATE` in the `***** F_FSJ PROCESSING RESULT *****` footer (e.g., `STAGE 1 ... ROTATE = 1800.00`). Whether the training code reads the footer directly or derives it from VEL8 × 100 is unconfirmed.
-- `MinPositionStage3` = 2.29 for l314.fsj in golden vectors; S.POS.M reaches ~+2.29 during Stage 3, making S.POS.M the likely source for position features.
-- `Mean`, `RMS`, `PeakValue`, `StandardDeviation`, `ClearanceFactor`, `CrestFactor`, `ImpulseFactor`, `ShapeFactor` — described as "time-domain force/position signal statistic" in FEATURE_SCHEMA. Likely LOADCELL but not confirmed.
-- `FFT_*` and `CWT_*` features — derived from a primary signal (likely LOADCELL) but signal source not confirmed.
-- `PlungeVelocity` — could be VEL7, computed from dS.POS.M/dt, or from the footer P.SPD parameter.
-- `MaxForceBelow3mm` — "maximum force below 3 mm plunge/position threshold"; position column for the 3 mm threshold is unconfirmed.
+**Status: PARTIALLY RESOLVED (2026-06-20) — Stage 6B still blocked on unresolved items below.**
 
-**Needed to implement Stage 6B (feature extraction).**  
-**Authoritative source:** `src/weldmltrainer/feature_extraction.py` from the WeldML trainer repository.
+**Source now in repo:** `model_exports/esp32_port/feature_extraction.py`
 
-**Blocker:** Stage 6B must not be coded until Q10 is answered by reading feature_extraction.py.  
-Stage 6A (file discovery and parser contract for structure/windowing) is NOT blocked by Q10.
+---
+
+### Confirmed from feature_extraction.py inspection (2026-06-20)
+
+**Primary signal for time-domain, FFT, and CWT features:**
+- `feature_extraction.py` is described as "Reusable feature extraction routines for weld LOADCELL signals."
+- All three feature families (`compute_time_domain_features`, `compute_fft_features`, `compute_cwt_features`) take `load_values: np.ndarray` and `time_values: np.ndarray` as arguments.
+- **Conclusion: `load_values` = LOADCELL column (index 1); `time_values` = TIME column (index 0).**
+- This covers 18 of the 22 features.
+
+**RotationSpeed (feature index 0):**
+- Golden vectors show exactly 1400.0, 1600.0, or 1800.0 rpm for all samples.
+- FSJ footer `STAGE N ... ROTATE = {RPM}` provides the same exact integer values.
+- VEL8 × 100 gives non-integer values (e.g., 1797.6, 1801.2) — does NOT match golden.
+- **Confirmed: RotationSpeed = footer ROTATE value (e.g., from `STAGE 3 ... ROTATE = 1800.00`).**
+
+**MinPositionStage3 (feature index 16):**
+- Golden value for l314.fsj = 2.29.
+- Cross-checked all 16 FSJ columns during STAGE==3 window rows.
+- POS7 (column index 7) min during STAGE==3 = 2.2900. **Exact match.**
+- S.POS.M during STAGE==3 ranges −0.274 to 2.041; min = −0.274. Does not match.
+- **Confirmed: MinPositionStage3 = min(POS7) where STAGE==3.**
+
+---
+
+### CRITICAL UNRESOLVED: Feature Value Parity Gap
+
+Despite the above, raw LOADCELL values in the parsed window do NOT match golden time-domain features for l314.fsj:
+
+| Feature | Golden | Computed (raw LOADCELL, window rows 1084..2244) | Delta |
+|---------|--------|--------------------------------------------------|-------|
+| Mean | 12.947 | 12.679 | −0.268 |
+| PeakValue | 16.44 | 14.730 | −1.710 |
+| RMS | 13.077 | 12.801 | −0.276 |
+| StandardDeviation | 1.838 | 1.764 | −0.074 |
+
+This gap is too large to be floating-point rounding. Possible causes:
+1. **`parse_and_clean` applies signal preprocessing** (smoothing, filtering, outlier removal) before computing features. The function name suggests cleaning steps not present in `feature_extraction.py` alone.
+2. **Window definition differs** from sposm_ge_zero + last_stage3_end. The training pipeline may use a different or additional constraint.
+3. **A different FSJ column is used** (e.g., IFB8 col 11, which has max=17.129 in window — closer to golden peak 16.44 but still not matching).
+
+No column among the 16 FSJ columns gives mean≈12.947 AND peak≈16.44 with the current window.
+
+---
+
+### Still Unresolved for Stage 6B
+
+| Feature | Status |
+|---------|--------|
+| MaxForceBelow3mm (idx 14) | Source column unconfirmed; "force below 3mm" position column unknown |
+| PlungeVelocity (idx 18) | Formula unknown; not in feature_extraction.py; likely in parse_and_clean |
+| Time-domain/FFT/CWT signal | Column is LOADCELL (confirmed), but preprocessing gap unresolved |
+| Window + signal parity | Golden values don't match raw LOADCELL; root cause unknown |
+
+---
+
+### Next action to close Q10
+
+The `feature_extraction.py` only provides the computation functions. The **column selection and signal preprocessing** happen in `weldmltrainer.parse_and_clean` (see REPRODUCTION_COMMANDS.md), which is NOT in the model_exports directory.
+
+**Required to fully close Q10:**
+1. Read `weldmltrainer/parse_and_clean.py` (or equivalent) to see exactly which FSJ column is passed as `load_values`, how the window is sliced, and what cleanup is applied.
+2. If `parse_and_clean.py` is not available, attempt to reverse-engineer from the golden vectors using all 16 FSJ columns.
+3. Confirm PlungeVelocity formula (VEL7, VEL8, or derivative of S.POS.M or POS7).
+4. Confirm MaxForceBelow3mm formula — "below 3mm" likely refers to POS7 < 3mm (since POS7 is the position column for MinPositionStage3).
+
+**Do not implement Stage 6B until Q10 is fully closed.**
+
+---
+
+**Blocker:** Stage 6B must not be coded until Q10 is fully answered.  
+Stage 6A (file discovery and parser contract for structure/windowing) is complete and unaffected.
 
 ---
 
@@ -308,4 +369,4 @@ Stage 6A (file discovery and parser contract for structure/windowing) is NOT blo
 | Q7 | **Resolved** | `esp_lcd` component + ST7789 panel driver; implemented in `components/lcd_st7789/` | 2026-06-19 |
 | Q8 | **File format resolved; Q10 split out** | .fsj ASCII text, 16 columns, S.POS.M>=0 to last STAGE==3 defines weld window | 2026-06-20 |
 | Q9 | **Resolved** | Preferred: `POST /api/flash` (Pi-side esptool); fallback: `idf.py -p rfc2217://192.168.1.43:4003 flash` | 2026-06-19 |
-| Q10 | **Open — blocks Stage 6B** | FSJ column → feature mapping; source is feature_extraction.py | 2026-06-20 |
+| Q10 | **Partially resolved — Stage 6B still blocked** | Signal=LOADCELL(col1), MinPositionStage3=min(POS7 col7) STAGE3, RotationSpeed=footer ROTATE confirmed; MaxForceBelow3mm/PlungeVelocity/parity gap UNRESOLVED | 2026-06-20 |
