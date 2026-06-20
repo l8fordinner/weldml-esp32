@@ -67,13 +67,25 @@ as appropriate). Neither requires network access.
 
 ## Decision Rule
 
+**Dual-model rescue policy (confirmed 2026-06-20 — Stage 6 planning):**
+
 ```
-BAD  if Model A predicts IF  OR  Model B predicts IF
-GOOD if Model A predicts NP AND Model B predicts NP
+PASS if Model B predicts NP  OR  Model A predicts NP
+FAIL if Model B predicts IF  AND Model A predicts IF
 ```
 
-Both models must agree on NP to produce a GOOD verdict. Either model predicting IF
-(incomplete fusion) produces BAD.
+Model B (Coarse Tree, LOOCV-validated) is the primary model.  
+Model A (Subspace KNN, gap-dataset-validated) is the secondary/rescue model.
+
+Evaluation order:
+1. Run Model B. If Model B predicts NP → PASS immediately.
+2. If Model B predicts IF → run Model A.
+3. If Model A predicts NP → PASS (Model A rescues).
+4. If Model A also predicts IF → FAIL (both agree).
+
+Equivalent: `PASS = (B == NP) OR (A == NP)` / `FAIL = (B == IF) AND (A == IF)`
+
+**Note:** An earlier draft of this document stated `GOOD if A==NP AND B==NP`, which is the opposite (more conservative, both-must-agree) policy. That policy is incorrect. The dual-model rescue policy above is the authoritative Stage 6 decision rule.
 
 ---
 

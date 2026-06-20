@@ -162,14 +162,81 @@ bundled ST7789 panel driver (`esp_lcd_panel_st7789`).  Implemented in
 
 **Question:** What is the exact format of the weld data file written to SD by the robot?
 
-**Needed to implement:**
-- File parser in firmware.
-- Feature extraction from the parsed data.
-- File naming convention and directory structure on SD.
+**Partially resolved (2026-06-20 — Stage 6 planning, from sample file inspection).**
 
-**Pending until:** File format specification provided by WeldML project owner.
+File structure and column layout are confirmed from four training-dataset samples:
+
+- `test_data/kawasaki_samples/GAP/NP/l314.fsj` (GAP, NP, PASS)
+- `test_data/kawasaki_samples/GAP/IF/l320.fsj` (GAP, IF, FAIL)
+- `test_data/kawasaki_samples/LOOCV/NP/l060.fsj` (LOOCV, NP, PASS)
+- `test_data/kawasaki_samples/LOOCV/IF/l046.fsj` (LOOCV, IF, FAIL)
+
+### File Format — Confirmed
+
+**Extension:** `.fsj` (Kawasaki FSJ log format)  
+**Encoding:** ASCII text, no BOM  
+**Delimiter:** space-delimited with one leading space per data row  
+**Sample rate:** 0.002 s time step = 500 Hz  
+
+**File structure (in order):**
+1. Header block: lines starting with `.*` — firmware versions, controller model (typically ~22 lines). Ignore for parsing.
+2. `.LANGUAGE ENGLISH` keyword
+3. `.FSJLOG` keyword
+4. Timestamp line: ` [YY/MM/DD HH:MM:SS]` (2-digit year, space-padded)
+5. Column header line: ` TIME LOADCELL GAP DEF  S.POS.M S.POS.LVDT T.AVE POS7  POS9 ICOM7 IFB7 IFB8  IFB9 VEL7 VEL8 STAGE`
+6. Data rows: space-delimited, 16 fields per row, until footer begins
+7. Footer: `***** F_FSJ PROCESSING RESULT *****` followed by stage parameters, then `.END`
+
+**16 data columns (0-indexed after leading space):**
+
+| Index | Name | Notes |
+|-------|------|-------|
+| 0 | TIME | Seconds; 0.002 s step; starts at 0.000 |
+| 1 | LOADCELL | Force; units from sensor |
+| 2 | GAP | Gap |
+| 3 | DEF | Deflection |
+| 4 | S.POS.M | Spindle position (motor) — **the SPOSM channel for segment windowing** |
+| 5 | S.POS.LVDT | Spindle position (LVDT) |
+| 6 | T.AVE | Tool average |
+| 7 | POS7 | Position axis 7 |
+| 8 | POS9 | Position axis 9 |
+| 9 | ICOM7 | Current command axis 7 |
+| 10 | IFB7 | Current feedback axis 7 |
+| 11 | IFB8 | Current feedback axis 8 |
+| 12 | IFB9 | Current feedback axis 9 |
+| 13 | VEL7 | Velocity axis 7 |
+| 14 | VEL8 | Velocity axis 8 (steady-state value ≈ rotation speed / 100) |
+| 15 | STAGE | Weld stage integer: 1, 2, 3, 4, 5 |
+
+**STAGE values:** STAGE starts at 1 (pre-plunge), transitions 1→2→3→4→5 during weld, then the footer begins with `*****`.  
+**Stage 3** is the active stir dwell phase and defines the end of the feature extraction window.
+
+**File sizes (from samples):**
+- l314.fsj: 271 KB, 2610 lines, stage transition at ~time 3.42s
+- l320.fsj: 526 KB, 5078 lines
+- l060.fsj: 530 KB, 5029 lines
+- l046.fsj: 257 KB, 2461 lines
+
+**Footer ROTATE field:** Each stage line in the footer has `ROTATE = {RPM}` (e.g., `STAGE 1 ... ROTATE = 1800.00`). The programmed rotation speed is constant across all stage entries within a file (either 1400.00 or 1800.00 in the samples). Golden vectors confirm `RotationSpeed` = 1400.0 or 1800.0 exactly, consistent with the footer ROTATE parameter.
+
+### Weld Window — Confirmed
+
+Per `FEATURE_SCHEMA.json` and training command (`--segment-start sposm_ge_zero`):
+- **Window start:** First data row where S.POS.M (column index 4) >= 0
+- **Window end:** Last data row where STAGE (column index 15) == 3
+- Feature extraction runs only on rows within this window.
+
+For l314.fsj: window starts ~time 2.168 s, ends ~time 4.488 s (within Stage 3).
+
+### Remaining Open Item → See Q10
+
+File format is confirmed. The remaining blocker for Stage 6B (feature extraction) is:
+**Which FSJ column(s) are the primary signal source for time-domain, FFT, and CWT features?**  
+This is documented in Q10. Q8 is closed for file structure/format.
 
 ---
+
+## Q9: WSL → Pi Flash Path
 
 ## Q9: WSL → Pi Flash Path
 
@@ -206,6 +273,28 @@ Required before: OTA expansion, SPIFFS above 4MB, or production WeldML firmware 
 
 ---
 
+## Q10: FSJ Feature Channel Mapping
+
+**Question:** Which FSJ data column (or footer field) is the primary signal source for each of the 22 model features?
+
+**Context:**
+- Q8 closed for file format/structure. The 16 FSJ column names are confirmed.
+- `FEATURE_SCHEMA.json` describes features by purpose ("time-domain mean", "FFT bandwidth", etc.) but does not name the source FSJ column.
+- `RotationSpeed` in golden vectors is exactly 1400.0 or 1800.0 — consistent with `ROTATE` in the `***** F_FSJ PROCESSING RESULT *****` footer (e.g., `STAGE 1 ... ROTATE = 1800.00`). Whether the training code reads the footer directly or derives it from VEL8 × 100 is unconfirmed.
+- `MinPositionStage3` = 2.29 for l314.fsj in golden vectors; S.POS.M reaches ~+2.29 during Stage 3, making S.POS.M the likely source for position features.
+- `Mean`, `RMS`, `PeakValue`, `StandardDeviation`, `ClearanceFactor`, `CrestFactor`, `ImpulseFactor`, `ShapeFactor` — described as "time-domain force/position signal statistic" in FEATURE_SCHEMA. Likely LOADCELL but not confirmed.
+- `FFT_*` and `CWT_*` features — derived from a primary signal (likely LOADCELL) but signal source not confirmed.
+- `PlungeVelocity` — could be VEL7, computed from dS.POS.M/dt, or from the footer P.SPD parameter.
+- `MaxForceBelow3mm` — "maximum force below 3 mm plunge/position threshold"; position column for the 3 mm threshold is unconfirmed.
+
+**Needed to implement Stage 6B (feature extraction).**  
+**Authoritative source:** `src/weldmltrainer/feature_extraction.py` from the WeldML trainer repository.
+
+**Blocker:** Stage 6B must not be coded until Q10 is answered by reading feature_extraction.py.  
+Stage 6A (file discovery and parser contract for structure/windowing) is NOT blocked by Q10.
+
+---
+
 ## Resolution Log
 
 | Q | Status | Decision | Date |
@@ -217,5 +306,6 @@ Required before: OTA expansion, SPIFFS above 4MB, or production WeldML firmware 
 | Q5 | **Resolved** | Manual BOOT+RESET works; automated GPIO path also confirmed; sufficient for MVP dev phase | 2026-06-19 |
 | Q6 | **Resolved** | No robot signal required; 5000 ms write-idle is the completion indicator (Stage 5 decision) | 2026-06-19 |
 | Q7 | **Resolved** | `esp_lcd` component + ST7789 panel driver; implemented in `components/lcd_st7789/` | 2026-06-19 |
-| Q8 | Open | | |
+| Q8 | **File format resolved; Q10 split out** | .fsj ASCII text, 16 columns, S.POS.M>=0 to last STAGE==3 defines weld window | 2026-06-20 |
 | Q9 | **Resolved** | Preferred: `POST /api/flash` (Pi-side esptool); fallback: `idf.py -p rfc2217://192.168.1.43:4003 flash` | 2026-06-19 |
+| Q10 | **Open — blocks Stage 6B** | FSJ column → feature mapping; source is feature_extraction.py | 2026-06-20 |

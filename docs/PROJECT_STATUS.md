@@ -7,7 +7,7 @@ Update this at the end of each working session and commit it with the session's 
 
 ## Current State (2026-06-20)
 
-**Phase:** Stage 5 COMPLETE — Linux/Pi and Windows MSC paths both verified. JSON write confirmed on hardware.
+**Phase:** Stage 5 COMPLETE. Stage 6 plan and architecture documented. Stage 6A is next — no code written yet.
 
 **Confirmed this session (2026-06-20, Stage 5 fix + verification):**
 
@@ -48,6 +48,220 @@ USB enumerating as `303a:4003`. SD card visible as sda1.
 
 **Active flash path:** Direct-PC USB via usbipd-win (confirmed working). Pi RFC2217 path NOT re-tested
 this session (no flash needed — firmware unchanged). Pi path may now work after reboot, unverified.
+
+---
+
+## Stage 6 Plan (documented 2026-06-20)
+
+Stage 6 is split into four phases. Do not start a later phase until the earlier phase's blocker is resolved.
+
+### Phase 6A — FSJ file discovery and parser contract
+**Status: READY TO IMPLEMENT (no open blockers)**
+
+- Component: `components/weld_parser/`
+- Detects `.fsj` files on the SD card (newest by FAT mtime, same strategy as Stage 5 `find_newest("csv")`).
+- Parses FSJ file structure: skips `.*` header lines, finds `.FSJLOG` keyword, reads timestamp line, validates column header, streams 16-column data rows.
+- Identifies weld window: start = first row where S.POS.M (column index 4) >= 0; end = last row where STAGE (column index 15) == 3.
+- Buffers weld window rows or computes running statistics in a single pass.
+- Parser contract confirmed from sample files. See file format below.
+
+**Parser contract (confirmed from sample inspection 2026-06-20):**
+
+| Item | Confirmed value |
+|------|----------------|
+| Extension | `.fsj` |
+| Encoding | ASCII text, no BOM |
+| Delimiter | space-delimited, one leading space per data row |
+| Header | `.*` comment lines then `.LANGUAGE ENGLISH`, `.FSJLOG` |
+| Timestamp | ` [YY/MM/DD HH:MM:SS]` (line after `.FSJLOG`) |
+| Column header | ` TIME LOADCELL GAP DEF  S.POS.M S.POS.LVDT T.AVE POS7  POS9 ICOM7 IFB7 IFB8  IFB9 VEL7 VEL8 STAGE` |
+| Data rows | 16 space-delimited float/int fields per row |
+| Sample rate | 0.002 s step = 500 Hz |
+| STAGE column | Index 15 (last field), integer 1–5, then footer begins |
+| SPOSM column | Index 4 (S.POS.M), spindle position motor |
+| Window start | First row where S.POS.M >= 0.0 |
+| Window end | Last row where STAGE == 3 |
+| Footer | `***** F_FSJ PROCESSING RESULT *****` then `.END` |
+| Footer ROTATE | `STAGE N ... ROTATE = {RPM}` — programmed rotation speed |
+| File sizes | 257–530 KB, 2461–5078 lines (varies by weld duration) |
+
+**Sample traceability record (training dataset fixtures — do not rename or move):**
+
+| original_filename | folder_path | source_group | label_category | expected_result |
+|-------------------|-------------|--------------|----------------|-----------------|
+| l314.fsj | test_data/kawasaki_samples/GAP/NP/ | GAP | NP | PASS |
+| l320.fsj | test_data/kawasaki_samples/GAP/IF/ | GAP | IF | FAIL |
+| l060.fsj | test_data/kawasaki_samples/LOOCV/NP/ | LOOCV | NP | PASS |
+| l046.fsj | test_data/kawasaki_samples/LOOCV/IF/ | LOOCV | IF | FAIL |
+
+### Phase 6B — Feature extraction matching exported model schema
+**Status: BLOCKED on Q10 — do not implement until Q10 is answered**
+
+- Compute exactly 22 features from the weld window rows identified by Stage 6A.
+- Feature order and names are fixed (from both model `feature_order.json` files — they are identical).
+- No scaler or imputer; features go raw into inference.
+- **Q10 blocker:** Which FSJ column is the source signal for time-domain stats (Mean, RMS, PeakValue, etc.), FFT/CWT features, and whether RotationSpeed comes from the footer ROTATE field or VEL8. Read `src/weldmltrainer/feature_extraction.py` from the WeldML trainer repo to resolve Q10 before writing any feature extraction code.
+
+**Model feature schema (from `model_exports/esp32_port/FEATURE_SCHEMA.json` — both models use this):**
+
+| Index | Feature name | Source description | Units |
+|-------|-------------|-------------------|-------|
+| 0 | RotationSpeed | Source column or footer ROTATE (see Q10) | rpm |
+| 1 | CWT_DominantScale | CWT dominant scale | scale index |
+| 2 | CWT_EnergyEntropy | CWT energy entropy | unitless |
+| 3 | CWT_MaxScaleEnergy | Max CWT scale energy | derived energy |
+| 4 | CWT_MinScaleEnergy | Min CWT scale energy | derived energy |
+| 5 | CWT_TotalEnergy | Total CWT energy | derived energy |
+| 6 | ClearanceFactor | Time-domain stat | unitless |
+| 7 | CrestFactor | Time-domain stat | unitless |
+| 8 | FFT_DominantFreq | FFT dominant frequency | bin/Hz |
+| 9 | FFT_FrequencyBandwidth | FFT bandwidth | bin/Hz |
+| 10 | FFT_SpectralCentroid | FFT spectral centroid | bin/Hz |
+| 11 | FFT_SpectralFlatness | FFT spectral flatness | unitless |
+| 12 | FFT_SpectralSpread | FFT spectral spread | bin/Hz |
+| 13 | ImpulseFactor | Time-domain stat | unitless |
+| 14 | MaxForceBelow3mm | Max force when position < 3 mm | force units |
+| 15 | Mean | Time-domain mean | signal units |
+| 16 | MinPositionStage3 | Min position during STAGE==3 (likely S.POS.M) | mm |
+| 17 | PeakValue | Time-domain peak | signal units |
+| 18 | PlungeVelocity | Plunge velocity | velocity units |
+| 19 | RMS | Root mean square | signal units |
+| 20 | ShapeFactor | Time-domain stat | unitless |
+| 21 | StandardDeviation | Time-domain std dev | signal units |
+
+**Rules that must hold for any feature extraction implementation:**
+- Same feature names, same index order, same units as above.
+- All 22 features must be finite float32 values before inference is attempted.
+- If any feature is missing or non-finite: mark row FEATURE_INCOMPLETE, list missing features, do NOT run inference.
+- dtype: float32 (confirmed in FEATURE_SCHEMA and PREPROCESSING.json).
+
+### Phase 6C — Model inference and PASS/FAIL decision
+**Status: BLOCKED on 6B**
+
+**Model B (primary — Coarse Tree, `model_b_loocv947_coarse_tree/`):**
+- 5 nodes, max depth 2; implemented as nested if/else or static node table.
+- Node 0: `features[16] (MinPositionStage3) <= 2.1850` → left (leaf 1, class 0 = NP = PASS)
+- Node 2: `features[9] (FFT_FrequencyBandwidth) <= 0.2402` → left (leaf 3, class 0 = NP = PASS); else right (leaf 4, class 1 = IF = FAIL)
+- Routing: at a split node, `features[idx] <= threshold` goes left; else right.
+- Class mapping: 0 = NP = PASS; 1 = IF = FAIL.
+- No scaler; thresholds are in raw feature units.
+
+**Model A (secondary/rescue — Subspace KNN, `model_a_gap100_subspace_knn/`):**
+- 200 BaggingClassifier estimators; each uses 14 of 22 features (subset per estimator).
+- Each estimator: nearest-neighbor vote over 38 stored training vectors.
+- Voting: average per-estimator class probabilities; class with highest average wins.
+- Implementation: store feature subset indices, training labels, and training vectors in flash. Stream Euclidean distances to keep RAM bounded. See `portable_model.json`.
+- Only invoked if Model B predicts IF (class 1). Do not invoke Model A when Model B predicts NP.
+
+**Dual-model rescue decision policy:**
+```
+if model_b_class == 0 (NP):
+    result = PASS   # Model B says good; accept immediately
+else:
+    run Model A
+    if model_a_class == 0 (NP):
+        result = PASS   # Model A rescues
+    else:
+        result = FAIL   # Both predict IF
+```
+Equivalent: `PASS = (B==NP) OR (A==NP)` / `FAIL = (B==IF) AND (A==IF)`
+
+### Phase 6D — Persistent results index and traceability
+**Status: BLOCKED on 6C for inference; results CSV architecture is decided now**
+
+**Active results file:** `/weldml_results.csv` on the SD card root. This filename is fixed and stable. Do not use datetime-stamped filenames for the active index.
+
+**One row per processed weld file / processing attempt.**
+
+**Required CSV columns (in order):**
+
+| Column | Description |
+|--------|-------------|
+| session_id | Firmware boot/session identifier (e.g., NVS counter or uptime-seeded) |
+| record_id | Per-session sequence number |
+| original_filename | Original .fsj filename, unchanged |
+| folder_path | SD card folder path of the file, if known |
+| source_group | GAP or LOOCV if known from test path; blank for robot-written files |
+| label_category | NP or IF if known; blank for robot-written files |
+| expected_result | PASS or FAIL if known; blank for robot-written files |
+| file_size | File size in bytes |
+| file_mtime_fat | FAT mtime as YYYYMMDDHHMMSS string |
+| file_hash | Optional MD5 or CRC32 of file contents; blank if not computed |
+| processed_at_esp | ESP RTC timestamp if available; blank if clock unreliable |
+| uptime_ms | Firmware uptime at processing time (always available) |
+| status | PASS / FAIL / FEATURE_INCOMPLETE / PARSE_ERROR / IO_ERROR |
+| error_code | Error code if status is error/incomplete |
+| error_message | Human-readable error, max 128 chars |
+| firmware_version | Firmware build version string |
+| parser_version | Parser component version |
+| model_version | Model export version string |
+| sample_count | Number of rows in the extracted weld window |
+| sample_rate_hz | 500 (from 0.002 s step) — confirm from file |
+| window_start_row | File row index of first window row |
+| window_end_row | File row index of last window row (STAGE==3) |
+| feat_RotationSpeed | Feature value or blank if FEATURE_INCOMPLETE |
+| feat_CWT_DominantScale | |
+| feat_CWT_EnergyEntropy | |
+| feat_CWT_MaxScaleEnergy | |
+| feat_CWT_MinScaleEnergy | |
+| feat_CWT_TotalEnergy | |
+| feat_ClearanceFactor | |
+| feat_CrestFactor | |
+| feat_FFT_DominantFreq | |
+| feat_FFT_FrequencyBandwidth | |
+| feat_FFT_SpectralCentroid | |
+| feat_FFT_SpectralFlatness | |
+| feat_FFT_SpectralSpread | |
+| feat_ImpulseFactor | |
+| feat_MaxForceBelow3mm | |
+| feat_Mean | |
+| feat_MinPositionStage3 | |
+| feat_PeakValue | |
+| feat_PlungeVelocity | |
+| feat_RMS | |
+| feat_ShapeFactor | |
+| feat_StandardDeviation | |
+| model_b_class | 0=NP, 1=IF, or blank |
+| model_b_confidence | Class 1 probability (0.0–1.0) or blank |
+| model_a_class | 0=NP, 1=IF, or blank (blank if Model A not invoked) |
+| model_a_confidence | Class 1 vote fraction (0.0–1.0) or blank |
+| final_result | PASS / FAIL / FEATURE_INCOMPLETE / ERROR |
+| final_reason | Which model(s) determined outcome, or error |
+| missing_features | Comma-separated feature names if FEATURE_INCOMPLETE; blank otherwise |
+
+**CSV format rules:**
+- UTF-8, comma-separated, standard RFC 4180.
+- Empty fields: empty string (no spaces), not "null" or "NaN".
+- Float values: 6 significant digits, no scientific notation.
+- First row: column header.
+- Append-only during a session; new session may write a fresh file (see upload note below).
+
+**Future upload/archive flow (do NOT implement in Stage 6):**
+- A later web GUI uploads both the source `.fsj` files and `/weldml_results.csv` to a backend.
+- After upload is verified, the GUI removes the uploaded files and results from the ESP.
+- The ESP then starts a fresh `/weldml_results.csv` on the next write cycle.
+- For archived copies, dated paths like `/uploaded/YYYYMMDD_HHMMSS/weldml_results.csv` are acceptable.
+- Stage 6 must not implement any part of this upload flow — it only ensures the results CSV is written correctly.
+
+### Stage 6 — Model export verification
+
+**Both models confirmed from `model_exports/esp32_port/`:**
+
+| Item | Confirmed |
+|------|-----------|
+| Feature schema version | `2026-06-19-export` |
+| Feature count | 22 |
+| Feature order | Identical in FEATURE_SCHEMA.json, model_a/feature_order.json, model_b/feature_order.json |
+| Scaler/imputer | None (both models) |
+| Input dtype | float32 |
+| NaN handling | Caller must validate; no imputation in models |
+| Class mapping | 0=NP (PASS), 1=IF (FAIL) — both models |
+| Model B type | DecisionTreeClassifier, 5 nodes, max depth 2 |
+| Model B key features | Node 0: MinPositionStage3 (idx 16); Node 2: FFT_FrequencyBandwidth (idx 9) |
+| Model A type | BaggingClassifier (200 SubspaceKNN estimators) |
+| Model A size | Large — see portable_model.json; consider RAM before implementing |
+
+**Golden vectors:** `model_exports/esp32_port/golden_vectors/golden_vectors.csv` — use these for inference verification once feature extraction is implemented.
 
 ---
 
@@ -995,12 +1209,13 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 |---|-------|--------|----------|------|
 | Q1 | Port SmrtUsbEsp or rebase around it? | **Resolved** | Port as new components; no fork; `components/usb_msc_sd/` | 2026-06-19 |
 | Q2 | Native ESP-IDF or PlatformIO? | **Resolved** (follows Q1) | Native ESP-IDF; in use since Stage 1 | 2026-06-19 |
-| Q3 | SD ownership transition (MSC → firmware) | **Open** (follows Q6) | | |
+| Q3 | SD ownership transition (MSC → firmware) | **Resolved** | Write-idle detection + mount/unmount | 2026-06-19 |
 | Q4 | Pi workbench flash path for Waveshare | **Resolved** — HTTP portal + GPIO automation confirmed; `POST /api/flash` is preferred path | 2026-06-19 |
 | Q5 | Manual BOOT/RESET sufficient for early work? | **Resolved** — manual confirmed; automated GPIO path also available (gpio_boot=18, gpio_en=17) | 2026-06-19 |
-| Q6 | Robot file-completion signal | **Open** | | |
-| Q7 | LCD driver structure | **Open** (follows Q1/Q2) | | |
-| Q8 | Weld file format | **Open** | | |
+| Q6 | Robot file-completion signal | **Resolved** — 5000 ms write-idle; no robot signal required | 2026-06-19 |
+| Q7 | LCD driver structure | **Resolved** — `esp_lcd` + ST7789; implemented | 2026-06-19 |
+| Q8 | Weld file format | **Resolved (format)** — .fsj ASCII, 16 cols, S.POS.M>=0 to last STAGE==3 | 2026-06-20 |
+| Q10 | FSJ feature channel mapping | **Open — blocks Stage 6B** | | |
 
 ---
 
@@ -1094,6 +1309,7 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
   - Fixed black semicircle at physical top-right = hardware/panel artifact (not software)
 - [x] **Stage 4 complete** — USB MSC + SD SPI verified on hardware (2026-06-19)
 - [x] **Stage 5 complete** — write-idle detection, JSON write, and MSC return verified on both Linux/Pi and Windows
+- [x] **Stage 6 plan documented** — FSJ file format confirmed from samples; model schema confirmed from exports; results CSV schema defined; 6A–6D phases planned; Q8 closed (format), Q10 opened (feature channel mapping)
   - `components/usb_msc_sd/` — TinyUSB CDC+MSC + SD SPI init; SPI3_HOST, sdspi host, sdmmc_card_init
   - LCD green = SD card init success; USB re-enumerated 303a:1001→303a:4003 (OTG PHY switch) — confirmed on both Windows and Pi
   - MADCTL mirror(true,true) applied in lcd_st7789.c (orientation fix from Stage 3)
@@ -1104,18 +1320,25 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 ## What Is Blocked
 
 - [x] MADCTL orientation: `mirror(true,true)` added to `lcd_st7789.c` (Stage 4 session)
-- [ ] SD ownership transition (Q3) — follows Q6
-- [ ] Robot file-completion signal (Q6) — open
-- [ ] Weld file format (Q8) — open
-- [ ] Automated workbench flash workflow — Pi GPIO for Key1/Key2 wiring unverified
+- [x] SD ownership transition (Q3) — resolved via write-idle detection
+- [x] Robot file-completion signal (Q6) — resolved; no robot signal required
+- [x] Weld file format (Q8) — file structure resolved; feature channel mapping in Q10
+- [ ] **Stage 6B: Feature extraction** — blocked on Q10 (FSJ feature channel mapping; requires feature_extraction.py)
+- [ ] Automated workbench flash workflow — Pi GPIO for Key1/Key2 wiring unverified (low priority; manual flash works)
 
 ## What Is Next
 
-1. **Stage 5 is complete.** Proceed to Stage 6 when ready.
-   Stage 6 = real CSV parser + weld model inference. See `docs/MVP_REQUIREMENTS.md` for scope.
-   Resolve Q8 (weld file format) before writing the parser.
+1. **Stage 6A: FSJ file parser** — implement `components/weld_parser/`.
+   - Detects `.fsj` files, parses header/columns/data rows, extracts weld window (S.POS.M >= 0 to last STAGE==3).
+   - Does NOT block on Q10; can implement structure parsing and window detection immediately.
+   - Validate against `test_data/kawasaki_samples/` samples.
 
-2. **Add `workbench.local` to WSL `/etc/hosts`** (low priority housekeeping):
+2. **Resolve Q10 before Stage 6B** — read `src/weldmltrainer/feature_extraction.py` from the WeldML trainer repo to confirm:
+   - Which FSJ column is the primary signal for Mean, RMS, PeakValue, etc.
+   - Whether RotationSpeed comes from the footer ROTATE field or VEL8 × 100
+   - Which column is the position source for MinPositionStage3 and MaxForceBelow3mm
+
+3. **Add `workbench.local` to WSL `/etc/hosts`** (low priority housekeeping):
    `echo "192.168.1.43 workbench.local" | sudo tee -a /etc/hosts`
 
 ---
