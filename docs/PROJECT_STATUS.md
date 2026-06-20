@@ -7,17 +7,17 @@ Update this at the end of each working session and commit it with the session's 
 
 ## Current State (2026-06-20)
 
-**Phase:** Stage 5 IN PROGRESS. Instrumented build done. Reflash BLOCKED — power-cycle download mode
-did NOT resolve esptool sync failure. Device shows 303a:1001, cdc_acm freshly bound, but ROM bootloader
-still unreachable. Root cause is deeper than cdc_acm driver state — suggests USB PHY or bootloader
-communication layer issue on this device instance.
+**Phase:** Stage 5 BLOCKED. Instrumented build done. Both esptool and OpenOCD paths fail.
+Device in unrecoverable USB state: ROM bootloader non-responsive (sync fails), JTAG vendor strings
+disabled (OpenOCD init fails). Root cause: `usb_new_phy()` in Stage 5 firmware partially disabled
+USB JTAG without properly enabling OTG. Requires firmware fix or full erase via alternative method.
 
 **Branch:** `main`  
 **Last committed:** `c98cbd3` (Stage 5 diagnosis — add tinyusb_driver_install return-code logging)  
-**Working tree:** CLEAN
+**Working tree:** CLEAN (will add STATUS.md update)
 
-**Board state:** SLOT3. Stage 5 firmware still running (d1c0587 flash). USB at 303a:1001.
-**Pi cdc_acm state:** BOUND and fresh (restored 2026-06-20, timestamp 16423s).
+**Board state:** SLOT3. Stage 5 firmware still running (d1c0587 flash). USB at 303a:1001, stable, non-responsive.
+**Diagnostic status:** OpenOCD JTAG reset failed; esptool sync fails; both paths blocked by Stage 5 USB PHY state.
 
 ---
 
@@ -70,6 +70,45 @@ This suggests the root cause is deeper than cdc_acm driver state caching. Possib
    - Check if TinyUSB CDC driver is interfering with ROM bootloader after soft reset
    - May require adding explicit USB PHY reset code before TinyUSB init
 4. **Accept hardware limitation** and manually reset via a different method (if available)
+
+**Do NOT proceed with Stage 6.** Stop on failure.
+
+---
+
+## Session Handoff — 2026-06-20 (Stage 5 — OpenOCD JTAG CPU reset diagnostic)
+
+**Goal:** Diagnostic option A — use OpenOCD/JTAG to reset CPU and attempt to unblock esptool sync.
+
+**Completed this session:**
+- Started OpenOCD directly via CLI with init + reset run commands
+- Connected to device (espressif USB JTAG found at 303a:1001, capabilities=0x2000)
+- Attempted to initialize target and issue reset
+
+**OpenOCD reset attempt result: FAILED**
+```
+OpenOCD: libusb_get_string_descriptor_ascii() failed with -1
+```
+
+**Diagnosis:**
+OpenOCD cannot initialize the target because JTAG vendor strings are inaccessible. This is consistent with the earlier Stage 5 diagnosis (line ~118-121 of previous session): `usb_new_phy()` has partially disabled USB JTAG vendor-specific communication while leaving the device enumerated as 303a:1001.
+
+**Conclusion:**
+Stage 5 firmware has left the device in an unrecoverable USB state:
+- ROM bootloader is non-responsive on serial (esptool sync fails)
+- JTAG vendor strings are disabled (OpenOCD init fails)
+- Device is stable at 303a:1001 but neither path is functional
+
+**Stop condition reached:** "If OpenOCD cannot connect to the target, stop."
+
+This rules out both Option A (OpenOCD) and any CPU reset. The device requires either:
+1. **Firmware fix**: Add explicit USB PHY deinit/reset before `usb_new_phy()` call in Stage 5 code
+2. **Hardware reset**: GPIO-assisted reset (Option B) if wiring is confirmed
+3. **Full erase + re-flash**: If available via an alternative path (not blocked by sync issues)
+
+**Next session recommendation:** Option C (firmware audit) — inspect Stage 5 `usb_msc_sd.c` and `weld_processor.c` for USB PHY initialization bugs. Specifically:
+- Check if `usb_new_phy()` requires explicit USB Serial JTAG deinit before calling
+- Check ESP-IDF 5.3.2 known issues with simultaneous USB JTAG console
+- Possible fix: add `usb_serial_jtag_ll_disable_intr_mask()` or similar before TinyUSB init
 
 **Do NOT proceed with Stage 6.** Stop on failure.
 
