@@ -7,26 +7,157 @@ Update this at the end of each working session and commit it with the session's 
 
 ## Current State (2026-06-20)
 
-**Phase:** Stage 5 functional test complete. Idle detection fires; JSON write unconfirmed.
+**Phase:** Stage 5 Linux/Pi MSC verification — USB enumeration confirmed, write-idle detection and JSON write unconfirmed.
 
-**Confirmed this session:**
-- Direct-PC USB (usbipd-win → WSL) is the working flash path. Pi path remains blocked until Pi rebooted.
-- TinyUSB CDC+MSC enumerates correctly as `303a:4003`.
-- Stage 5 write-idle detection fires: board reached `WELD_STATE_SUCCESS` (GREEN) after CSV copy.
-- LCD reached GREEN (SUCCESS state) — confirms idle timer, process_sd(), and MSC handoff all ran.
-- JSON placeholder (`weldml_result.json`) not confirmed visible in Windows Explorer after processing.
-  Root cause: Windows FAT directory cache does not auto-refresh after firmware's unmount/remount cycle.
-  JSON is likely present on the SD card but requires drive reconnect (eject+replug) to appear.
-  Cannot confirm from WSL (raw block device read requires sudo, which requires a terminal).
+**Confirmed this session (2026-06-20, Pi reboot session):**
+- Pi/workbench rebooted to clear prior dwc_otg EPROTO state. Workbench API came back online.
+- ESP32 moved from Windows PC to Pi USB hub. Enumerated cleanly: `303a:1001` → `303a:4003`.
+- `sda`/`sda1` block device visible on Pi: TinyUSB Flash Storage 0.2, 29 GiB, write-through.
+- Pi can mount `/dev/sda1` and write CSV files. Writes confirmed physically on SD card
+  (verified by `echo 3 > /proc/sys/vm/drop_caches` + fresh remount — files survive cache drop).
+- No SCSI errors, no USB disconnect/reconnect in dmesg during write tests.
+- `weldml_result.json` NOT found on SD card after write tests and 8-second idle wait.
+- LCD color at session end: **UNKNOWN** — user did not report, session ended at handoff threshold.
 
 **Branch:** `main`  
-**Last committed:** `a2ab828`  
+**Last committed:** `deecb30`  
 **Working tree:** CLEAN
 
-**Board state:** Connected to Windows PC. Running Stage 5 firmware (c98cbd3). LCD GREEN (last cycle succeeded).
-USB at `303a:4003`. MSC visible on Windows (drive K). Drive currently returned to Windows (usbipd detached).
+**Board state:** Connected to Pi USB hub. Running Stage 5 firmware (c98cbd3 build, deecb30 committed).
+USB enumerating as `303a:4003`. SD card visible as sda1.
 
-**Active flash path:** Direct-PC USB via usbipd-win (see procedure in prior handoff). Pi path is secondary.
+**Active flash path:** Direct-PC USB via usbipd-win (confirmed working). Pi RFC2217 path NOT re-tested
+this session (no flash needed — firmware unchanged). Pi path may now work after reboot, unverified.
+
+---
+
+## Pi/Workbench USB Recovery Rule
+
+**Apply this before spending time debugging USB failures on the Pi:**
+
+If flashing or USB enumeration through the Pi/workbench fails with any of these symptoms:
+- `dwc_otg` EPROTO state in dmesg
+- Device stuck at `303a:1001` (JTAG/serial) without switching to `303a:4003`
+- `esptool` "No serial data received"
+- `openocd` `libusb_get_string_descriptor_ascii() = -1`
+- RFC2217 timeout or "Remote does not accept parameter change"
+- Missing `/dev/ttyACM0` devnode
+- Stale `cdc_acm` state refusing to rebind
+
+**Recovery sequence:**
+1. Disconnect ESP32 from Pi USB hub.
+2. Reboot the Pi: `ssh casey@192.168.1.43 "sudo reboot"` — then wait 30–60 s.
+3. Confirm workbench API is back: `curl -s http://192.168.1.43:8080/api/info`
+4. Confirm SLOT3 is `absent` in `/api/devices` (clean baseline before reconnect).
+5. Reconnect ESP32 to Pi USB hub.
+6. Check `/api/devices`, `dmesg | tail -30`, `lsusb`, and block-device enumeration.
+7. Only proceed with Pi-side flashing or Linux MSC testing after state is clean.
+
+**Why this works:** The Pi's `dwc_otg` USB host controller can enter an EPROTO (USB protocol error)
+state that persists across ESP32 power cycles and driver rebinds. A full Pi reboot clears dwc_otg
+state completely. Do NOT waste time with `cdc_acm` unbind/rebind or `esptool` retries — they do not
+fix host-controller-level EPROTO. If a Pi reboot fixes enumeration, document it as the required step.
+
+**Windows/direct-PC path (usbipd-win → WSL) is the fallback when Pi is stuck:**
+- Disconnect from Pi, hold Key1, plug into Windows PC, release Key1.
+- Admin PowerShell: `usbipd bind --busid <bus-id>` (one-time bind, persists until unbound).
+- WSL: `"/mnt/c/Program Files/usbipd-win/usbipd.exe" attach --wsl --busid <bus-id>`
+- Flash with WSL esptool. See prior handoffs for exact command.
+
+---
+
+## Session Handoff — 2026-06-20 (Stage 5 Linux/Pi MSC verification)
+
+**Goal:** Verify Stage 5 firmware works as a Linux USB MSC device on Pi after Pi reboot cleared dwc_otg state.
+
+**Context:**
+- Windows direct-PC USB test (prior session) confirmed TinyUSB CDC+MSC works and write-idle detection
+  fires (LCD GREEN). But `weldml_result.json` was not confirmed in Windows Explorer (FAT cache stale).
+- Pi path was previously blocked by dwc_otg EPROTO. Pi was rebooted this session to clear it.
+- Board moved from Windows PC to Pi USB hub. No firmware changes made this session.
+
+**Pi USB host behavior after reboot:**
+
+| Check | Expected | Actual | Result |
+|---|---|---|---|
+| Workbench API `/api/info` | Online | `{"hostname":"PiEspWrkbench","slots_configured":3}` | PASS |
+| SLOT3 baseline (before connect) | `state: absent` | `state: absent` | PASS |
+| USB enumeration after connect | `303a:4003` | `303a:4003`, `sda`/`sda1` 29 GiB | **PASS** |
+| dmesg: PHY switch | `303a:1001 → 303a:4003` | Confirmed in dmesg | **PASS** |
+| Pi can mount `/dev/sda1` | FAT filesystem visible | Mounted cleanly, files visible | **PASS** |
+| Write CSV to sda1 | File lands on SD card | Confirmed after `drop_caches` | **PASS** |
+| SCSI errors | None | None in dmesg throughout | PASS |
+| `weldml_result.json` after idle | Present on SD | **NOT FOUND** | **UNVERIFIED** |
+
+**Write-idle detection status: UNVERIFIED**
+
+The JSON file did not appear after writing CSV files and waiting 8 seconds (> 5 s idle window).
+LCD color was NOT reported by user at session end — cannot confirm whether `process_sd()` ran.
+
+**Root cause investigation (analysis only — no firmware changed):**
+
+Three possible explanations, ordered by likelihood:
+
+1. **`tud_msc_write10_complete_cb` not firing for Pi writes, so idle timer never starts.**
+   - No LCD color change was observed/reported. If LCD stayed CYAN, callback did not fire.
+   - USB SCSI WRITE10 commands were issued (files are physically on SD), so CSW was received.
+   - `tud_msc_write10_complete_cb` is called after CSW — it should fire. Needs confirmation.
+
+2. **FAT coordination conflict (FatFS vs. Linux vfat, most likely root cause if callback fires).**
+   - `usb_msc_sd_init()` calls `tinyusb_msc_storage_mount("/sdcard")` BEFORE `tinyusb_driver_install()`.
+   - This sets `is_fat_mounted = true` at TinyUSB start. When `process_sd()` calls `mount()`, it's a no-op.
+   - When `process_sd()` calls `tinyusb_msc_storage_unmount()` at end, FatFS is unregistered (`is_fat_mounted = false`).
+   - After unmount, Linux sends more WRITE10 commands (next mount's dirty bit, subsequent tests).
+   - These raw sector writes go to the same FAT/directory sectors FatFS just updated for the JSON.
+   - Linux's stale in-memory FAT table does not know about FatFS's JSON allocation → cluster overlap → JSON overwritten.
+   - Confirmed by `drop_caches` test: weld_test.csv and weld_run2.csv ARE physically on SD, meaning
+     `_msc_storage_write_sector` did succeed at some point — which only happens when `is_fat_mounted = false`.
+     This means `process_sd()` already ran (and unmounted FatFS) BEFORE those writes landed. JSON written
+     by FatFS may have been overwritten by the subsequent Linux writes that used a conflicting FAT view.
+
+3. **`write_placeholder()` silent failure (documented bug from previous session).**
+   - If `fopen(RESULT_PATH, "w")` fails for any reason, function returns without propagating failure.
+   - `process_sd()` still calls `set_state(WELD_STATE_SUCCESS)` — LCD shows GREEN regardless.
+   - This bug is the documented fix needed before Stage 6.
+
+**What is needed to isolate which cause:**
+- Ask user to report LCD color after next write test — CYAN = callback not firing, GREEN = process_sd ran.
+- Controlled test: write CSV → wait 7s (no remount) → check for JSON by mounting read-only
+  (`mount -o ro /dev/sda1`) so no dirty-bit write contaminates the FAT.
+- If JSON appears on read-only mount → FAT conflict theory confirmed (prior remounts overwrote it).
+- If JSON absent on read-only mount → `write_placeholder()` is failing or LCD is CYAN (callback not firing).
+
+**Pi reboot benefit confirmed:**
+The Pi reboot cleared the prior `dwc_otg` EPROTO state that had blocked all USB communication for
+multiple sessions. After reboot: clean 303a:1001 → 303a:4003 PHY switch, sda1 enumerated, R/W confirmed.
+This proves Pi is a viable USB host for Stage 5 testing — it was the host controller state, not firmware.
+
+**Why Linux/Pi behavior matters (even though direct-PC USB works):**
+The Kawasaki robot's USB host (the real deployment target) is an embedded Linux system, not Windows.
+Robot-side USB MSC behavior (SCSI TUR, write caching, FAT flush patterns) is closer to Linux than to
+Windows Explorer. Windows Explorer uses FAT buffering and user-visible drive refresh cycles that differ
+from how a robot's file writer will behave. Stage 5 must be verified on Linux before being trusted
+in the field.
+
+**Stage 5 completion criteria (all must be met before Stage 6):**
+- [ ] `weldml_result.json` confirmed present on SD card after write-idle cycle on Pi
+- [ ] LCD color sequence CYAN→YELLOW→BLUE→GREEN confirmed during write-idle cycle on Pi
+- [ ] Fix write_placeholder() silent failure: return bool, set FAILURE state on false (one-line fix)
+- [ ] Serial log captured during write-idle cycle (confirm `find_newest("csv")` finds file and `write_placeholder()` succeeds)
+
+**Next concrete steps (in order):**
+1. Reconnect board to Pi (it's already there). Ask user to watch LCD.
+2. Mount sda1, write a CSV, sync, umount. Watch for LCD CYAN→YELLOW→BLUE→GREEN.
+3. After idle fires (7–8 s), mount read-only: `sudo mount -o ro /dev/sda1 /tmp/sdmount && ls -la /tmp/sdmount/`
+4. If JSON found → FAT conflict is the cause. Fix: do not remount between `process_sd()` and JSON check.
+5. If JSON absent → `write_placeholder()` is failing silently or callback not firing. Fix the silent failure bug.
+6. After JSON is confirmed: apply silent failure fix, build, flash (direct-PC USB), re-test on Pi.
+7. Capture serial log (boot UART GPIO43/44 or boot-time USB JTAG before PHY switch).
+
+**Flash path status:**
+- Direct-PC USB (usbipd-win → WSL): **CONFIRMED WORKING** (prior session, deecb30). Use this for flashing.
+- Pi RFC2217 path: **NOT RE-TESTED** this session. Likely works after reboot, but unverified.
+  To test: stop OpenOCD → `idf.py -p rfc2217://192.168.1.43:4003 flash -D BOARD=waveshare-esp32-s3-lcd-147`
 
 ---
 
@@ -796,6 +927,10 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 | Direct-PC USB flash (Stage 5) | Waveshare | PC USB → usbipd → WSL | 2026-06-20 | PASS | esptool v4.11.0, 115200 baud, no-stub; all 3 regions SHA-verified |
 | TinyUSB enumeration (Stage 5, PC) | Waveshare | PC USB | 2026-06-20 | **PASS** | 303a:1001→303a:4003 confirmed; CDC+MSC; MSC folder opened on Windows |
 | Write-idle detection (Stage 5) | Waveshare | PC USB | 2026-06-20 | **PARTIAL** | GREEN (SUCCESS) reached after CSV copy; idle timer and process_sd() ran. JSON not confirmed in Explorer (FAT cache stale on Windows). Serial log not captured. Fix needed: write_placeholder() failure must set FAILURE state. |
+| Pi USB host recovery (reboot) | Waveshare | Pi USB | 2026-06-20 | **PASS** | Pi reboot cleared dwc_otg EPROTO. 303a:1001→303a:4003 PHY switch clean after reboot. |
+| Linux USB MSC enumeration | Waveshare | Pi USB (sda1) | 2026-06-20 | **PASS** | sda/sda1 29 GiB, write-through, TinyUSB Flash Storage 0.2. No SCSI errors. |
+| Linux MSC write (CSV files) | Waveshare | Pi USB (sda1) | 2026-06-20 | **PASS** | CSV files written by Pi confirmed physically on SD (survived drop_caches + remount). |
+| Write-idle detection (Pi host) | Waveshare | Pi USB | 2026-06-20 | **UNVERIFIED** | JSON not found after 8 s idle. LCD color not reported. May be FAT conflict (FatFS + Linux vfat) or write_placeholder() silent failure. See handoff for root cause analysis. |
 
 ---
 
@@ -842,10 +977,12 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
   - Content displays 180° rotated with MADCTL=0x00 (needs mirror(true,true) before Stage 4 UI work)
   - Fixed black semicircle at physical top-right = hardware/panel artifact (not software)
 - [x] **Stage 4 complete** — USB MSC + SD SPI verified on hardware (2026-06-19)
-- [ ] **Stage 5 in progress** — TinyUSB CDC+MSC confirmed working (2026-06-20); SCSI write-idle detection not yet tested
+- [ ] **Stage 5 in progress** — Linux/Pi USB MSC confirmed; write-idle detection and JSON write unverified
   - `components/usb_msc_sd/` — TinyUSB CDC+MSC + SD SPI init; SPI3_HOST, sdspi host, sdmmc_card_init
-  - LCD green = SD card init success; USB re-enumerated 303a:1001→303a:4003 (OTG PHY switch)
+  - LCD green = SD card init success; USB re-enumerated 303a:1001→303a:4003 (OTG PHY switch) — confirmed on both Windows and Pi
   - MADCTL mirror(true,true) applied in lcd_st7789.c (orientation fix from Stage 3)
+  - Pi USB host enumeration confirmed after Pi reboot cleared dwc_otg EPROTO state
+  - CSV writes to sda1 confirmed reaching SD card (drop_caches verified); JSON not confirmed
   - **Build rule:** always pass `BOARD=waveshare-esp32-s3-lcd-147` to every `idf.py` call (build AND flash); omitting it poisons the CMake cache with the wrong board.h
 
 ## What Is Blocked
@@ -858,22 +995,24 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 
 ## What Is Next
 
-1. **Stage 5 — confirm JSON write on hardware.** Functional test showed GREEN (idle detection
-   works) but JSON file was not confirmed visible in Windows Explorer (FAT cache stale after
-   firmware unmount/remount). Next step: verify JSON presence by either:
-   - Eject + replug USB from Windows → Explorer re-reads FAT directory fresh
-   - OR attach to WSL, `sudo mount /dev/sde1 /tmp/sdcard`, `ls /tmp/sdcard/`
-   Then capture serial log during a write-idle cycle to see `weld_proc` log messages.
+1. **Stage 5 — confirm write-idle detection and JSON write on Pi (Linux host).**
+   Board is currently on Pi USB hub, enumerating as 303a:4003. Next test:
+   - Ask user to watch LCD before writing CSV.
+   - Mount sda1, write CSV, sync, umount. Watch for CYAN→YELLOW→BLUE→GREEN.
+   - After idle fires: mount READ-ONLY (`mount -o ro /dev/sda1`) to avoid dirty-bit write.
+   - Check for `weldml_result.json`. If present: confirm write-idle works on Pi. Done.
+   - If absent but LCD went GREEN: FAT conflict (Linux raw writes overwrite FatFS JSON). Fix needed.
+   - If LCD stayed CYAN: `tud_msc_write10_complete_cb` not firing. Investigate.
 
-2. **Fix write_placeholder() silent failure bug.** If `fopen(RESULT_PATH, "w")` fails, board
-   shows GREEN anyway (SUCCESS). `write_placeholder()` must return bool; `process_sd()` must
-   call `set_state(WELD_STATE_FAILURE)` on false. Small fix, required before Stage 6.
+2. **Fix write_placeholder() silent failure bug (required before Stage 6).**
+   If `fopen(RESULT_PATH, "w")` fails, board shows GREEN anyway (SUCCESS).
+   `write_placeholder()` must return bool; `process_sd()` must call `set_state(WELD_STATE_FAILURE)`
+   on false. One-line fix. Apply via direct-PC USB flash after isolating root cause.
 
-3. **Stage 5 flash path:** Direct-PC USB via usbipd-win is the confirmed path. Pi path
-   requires Pi reboot to clear dwc_otg state.
+3. **Stage 5 flash path:** Direct-PC USB via usbipd-win (confirmed). Pi RFC2217 may work after
+   reboot but not re-tested. Always use `-D BOARD=waveshare-esp32-s3-lcd-147` on every idf.py call.
 
-2. **Add `workbench.local` to WSL `/etc/hosts`** — requires sudo;
-   `echo "192.168.1.43 workbench.local" | sudo tee -a /etc/hosts`.
+4. **Add `workbench.local` to WSL `/etc/hosts`** — `echo "192.168.1.43 workbench.local" | sudo tee -a /etc/hosts`.
 
 ---
 
