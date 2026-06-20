@@ -51,6 +51,72 @@ this session (no flash needed — firmware unchanged). Pi path may now work afte
 
 ---
 
+## Session Handoff — 2026-06-20 (Stage 6 planning complete)
+
+**Goal:** Document Stage 6 architecture before implementation. No code written.
+
+**Branch:** `main`  
+**Last commit:** `806d67a` — Stage 6 plan: FSJ format, 6A–6D phases, results CSV schema, fix decision rule  
+**Working tree:** CLEAN (only untracked `test_data/` — fixture files, not committed by design)
+
+**What was done this session:**
+
+1. Read `docs/PROJECT_STATUS.md` and memory files to establish current state.
+2. Inspected all four training-dataset sample files:
+   - `test_data/kawasaki_samples/GAP/NP/l314.fsj`
+   - `test_data/kawasaki_samples/GAP/IF/l320.fsj`
+   - `test_data/kawasaki_samples/LOOCV/NP/l060.fsj`
+   - `test_data/kawasaki_samples/LOOCV/IF/l046.fsj`
+3. Read all model export files under `model_exports/esp32_port/`.
+4. Read `golden_vectors/golden_vectors.csv` to cross-check feature values.
+
+**Stage 5 status:** COMPLETE AND VERIFIED. Root cause was `CONFIG_FATFS_LFN_NONE=y`. Fix: `CONFIG_FATFS_LFN_HEAP=y` + `CONFIG_FATFS_MAX_LFN=64`. Confirmed on Pi (Linux MSC) and Windows. Do not reopen Stage 5.
+
+**Stage 6 planning status:** COMPLETE. Full plan written into PROJECT_STATUS.md (see Stage 6 Plan section below) and committed.
+
+**Documents updated this session:**
+- `docs/OPEN_QUESTIONS.md`: Q8 closed (file format confirmed); Q10 opened (feature channel mapping, blocks Stage 6B)
+- `docs/PROJECT_STATUS.md`: Stage 6 plan (phases 6A–6D, parser contract, 22-feature schema, 49-column results CSV, decision policy)
+- `docs/MVP_REQUIREMENTS.md`: Decision rule corrected to dual-model rescue (PASS = B_NP OR A_NP; FAIL = B_IF AND A_IF)
+
+**Sample fixture traceability (do not rename or move these files):**
+
+| original_filename | folder_path | source_group | label_category | expected_result |
+|---|---|---|---|---|
+| l314.fsj | test_data/kawasaki_samples/GAP/NP/ | GAP | NP | PASS |
+| l320.fsj | test_data/kawasaki_samples/GAP/IF/ | GAP | IF | FAIL |
+| l060.fsj | test_data/kawasaki_samples/LOOCV/NP/ | LOOCV | NP | PASS |
+| l046.fsj | test_data/kawasaki_samples/LOOCV/IF/ | LOOCV | IF | FAIL |
+
+**Open questions:**
+- Q8: File format RESOLVED. `.fsj` ASCII, 16 columns, 500 Hz, S.POS.M>=0 to last STAGE==3 defines weld window.
+- Q10: OPEN — blocks Stage 6B. Need `src/weldmltrainer/feature_extraction.py` to confirm which FSJ column is the primary signal for Mean/RMS/etc. and whether RotationSpeed comes from footer ROTATE or VEL8×100.
+
+**Exact next prompt for a fresh session:**
+
+```
+Read docs/PROJECT_STATUS.md only.
+
+Proceed with Stage 6A implementation.
+
+Stage 6A is unblocked. Implement components/weld_parser/ for .fsj file discovery and structural parsing:
+- Detect .fsj files on the SD card (newest by FAT mtime)
+- Parse header/column-line/data-row structure
+- Extract weld window: first row where S.POS.M (column index 4) >= 0 through last row where STAGE (column index 15) == 3
+- Buffer window rows or compute running accumulators in a single pass
+- Validate against test_data/kawasaki_samples/ sample files
+
+Parser contract is fully specified in the Stage 6 Plan section of PROJECT_STATUS.md.
+
+Do NOT implement feature extraction (Stage 6B). Q10 is unresolved.
+Do NOT implement model inference (Stage 6C).
+Do NOT implement results CSV writing beyond a placeholder (Stage 6D schema is documented but do not write the full CSV yet — that follows feature extraction).
+Do NOT build or flash until Stage 6A parser is written and passes a unit-level parse test on sample files.
+Do NOT inspect .env.
+```
+
+---
+
 ## Stage 6 Plan (documented 2026-06-20)
 
 Stage 6 is split into four phases. Do not start a later phase until the earlier phase's blocker is resolved.
