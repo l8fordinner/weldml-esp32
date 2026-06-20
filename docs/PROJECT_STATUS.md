@@ -5,18 +5,73 @@ Update this at the end of each working session and commit it with the session's 
 
 ---
 
-## Current State (2026-06-19)
+## Current State (2026-06-20)
 
-**Phase:** Stage 5 IN PROGRESS. Instrumented build done. Reflash BLOCKED — esptool cannot sync
-with ROM bootloader because Stage 5 runs at 303a:1001 (same PID as download mode), causing
-cdc_acm to reuse stale driver state after EN reset.
+**Phase:** Stage 5 IN PROGRESS. Instrumented build done. Reflash BLOCKED — power-cycle download mode
+did NOT resolve esptool sync failure. Device shows 303a:1001, cdc_acm freshly bound, but ROM bootloader
+still unreachable. Root cause is deeper than cdc_acm driver state — suggests USB PHY or bootloader
+communication layer issue on this device instance.
 
 **Branch:** `main`  
-**Last committed:** `ff79648` (Stage 5 diagnosis — document TinyUSB PHY switch investigation)  
-**Working tree:** DIRTY — `components/usb_msc_sd/usb_msc_sd.c` modified (boot instrumentation added, not yet committed)
+**Last committed:** `c98cbd3` (Stage 5 diagnosis — add tinyusb_driver_install return-code logging)  
+**Working tree:** CLEAN
 
-**Board state:** SLOT3. Stage 5 firmware still running (original d1c0587 flash). USB at 303a:1001.
-**Pi cdc_acm state:** UNBOUND (last SSH command left cdc_acm unbound). Run the rebind command below before any serial work.
+**Board state:** SLOT3. Stage 5 firmware still running (d1c0587 flash). USB at 303a:1001.
+**Pi cdc_acm state:** BOUND and fresh (restored 2026-06-20, timestamp 16423s).
+
+---
+
+## Session Handoff — 2026-06-20 (Stage 5 — power-cycle download mode FAILED to unblock esptool sync)
+
+**Goal:** Execute documented power-cycle download-mode sequence to resolve esptool sync failure.
+
+**Completed this session:**
+- Committed instrumented `usb_msc_sd.c` change (c98cbd3)
+- Restored cdc_acm on Pi: `echo '1-1.4:1.0' | sudo tee /sys/bus/usb/drivers/cdc_acm/bind` ✓
+- Performed power-cycle download-mode sequence:
+  1. Unplugged USB cable
+  2. Held Key1 (BOOT / GPIO0)
+  3. Plugged USB back in (still holding Key1)
+  4. Released Key1 → device in download mode
+
+**Flash attempt result: FAILED**
+```
+esptool v5.2.0 — Failed to connect to ESP32-S3: No serial data received.
+Exit code: 2
+```
+
+**Device state after power-cycle:**
+- lsusb: 303a:1001 (JTAG/serial debug unit) — correct for download mode
+- /dev/ttyACM0: exists, freshly bound (dmesg timestamp 16423.919s)
+- dmesg: no further 303a:4003 event
+- esptool: cannot sync with ROM bootloader
+
+**Conclusion:** Power-cycle did NOT resolve the issue. The handoff hypothesis was that unplugging USB would drop VDD_USB and fully reset USB PHY to ROM defaults. However, esptool still cannot communicate with the bootloader even with:
+- Fresh USB enumeration (power cycled)
+- Fresh cdc_acm driver binding
+- Device in correct 303a:1001 mode
+- /dev/ttyACM0 present and accessible
+
+This suggests the root cause is deeper than cdc_acm driver state caching. Possible causes:
+1. USB PHY hardware state on THIS device instance is damaged or in a non-recoverable state
+2. ROM bootloader on this device is non-responsive (hardware fault)
+3. cdc_acm/pyserial communication layer has a fundamental issue with this USB path
+4. Device needs a different reset sequence (e.g., hardware brownout reset via GPIO)
+
+**Next session options:**
+1. **Attempt OpenOCD CPU reset via SSH** (documented in NOTES.md) instead of Button reset
+   - `ssh casey@192.168.1.43 "openocd-esp32 -c 'source /usr/local/share/openocd-esp32/scripts/interface/esp_usb_jtag.cfg; source /usr/local/share/openocd-esp32/scripts/target/esp32s3.cfg; reset run; exit'"`
+   - This uses JTAG path (which is working — device enumerates as 303a:1001) to issue CPU reset and enter bootloader
+   - Then immediately attempt esptool flash
+2. **Try GPIO-assisted download mode entry** if workbench GPIO wiring is confirmed working
+   - Requires verification that Pi GPIO17 (EN/RESET) and GPIO18 (BOOT) are wired to the board
+   - Current status: "NOT WIRED" per WORKBENCH section, but should be retested
+3. **Inspect Stage 5 firmware for USB initialization bugs** that may leave ROM bootloader unresponsive
+   - Check if TinyUSB CDC driver is interfering with ROM bootloader after soft reset
+   - May require adding explicit USB PHY reset code before TinyUSB init
+4. **Accept hardware limitation** and manually reset via a different method (if available)
+
+**Do NOT proceed with Stage 6.** Stop on failure.
 
 ---
 
