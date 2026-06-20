@@ -7,17 +7,24 @@ Update this at the end of each working session and commit it with the session's 
 
 ## Current State (2026-06-20)
 
-**Phase:** Stage 5 Linux/Pi MSC verification — USB enumeration confirmed, write-idle detection and JSON write unconfirmed.
+**Phase:** Stage 5 Linux/Pi MSC verification — write-idle detection confirmed, `write_placeholder()` silently failing.
 
-**Confirmed this session (2026-06-20, Pi reboot session):**
-- Pi/workbench rebooted to clear prior dwc_otg EPROTO state. Workbench API came back online.
-- ESP32 moved from Windows PC to Pi USB hub. Enumerated cleanly: `303a:1001` → `303a:4003`.
-- `sda`/`sda1` block device visible on Pi: TinyUSB Flash Storage 0.2, 29 GiB, write-through.
-- Pi can mount `/dev/sda1` and write CSV files. Writes confirmed physically on SD card
-  (verified by `echo 3 > /proc/sys/vm/drop_caches` + fresh remount — files survive cache drop).
-- No SCSI errors, no USB disconnect/reconnect in dmesg during write tests.
-- `weldml_result.json` NOT found on SD card after write tests and 8-second idle wait.
-- LCD color at session end: **UNKNOWN** — user did not report, session ended at handoff threshold.
+**Confirmed this session (2026-06-20, JSON diagnosis):**
+- Write-idle detection confirmed on Pi: LCD went CYAN → YELLOW (writing) → BLUE (brief blink) → GREEN.
+  `tud_msc_write10_complete_cb` fires. Monitor task detects idle. `process_sd()` runs.
+- `weldml_result.json` NOT found after controlled read-only remount (no dirty-bit write from host
+  after process_sd()). Confirmed by raw disk scan (`dd | strings | grep pending_parse` → 0 hits).
+- FAT filesystem is healthy: `fsck.vfat -n /dev/sda1` → 8 files, 8/948992 clusters, no errors.
+- **Root cause isolated: `write_placeholder()` fails silently.**
+  `fopen("/sdcard/weldml_result.json", "w")` returns NULL. Function logs ESP_LOGE (invisible without
+  serial monitor) and returns. `process_sd()` proceeds to `set_state(WELD_STATE_SUCCESS)` → GREEN.
+  This is the documented bug (known since Stage 5 functional test on Windows).
+- **FAT coordination theory ruled out.** The `tud_mount_cb`/`tud_umount_cb` callbacks in
+  `tusb_msc_storage.c` correctly manage `is_fat_mounted`: host connects → `tud_mount_cb` →
+  `tinyusb_msc_storage_unmount()` (host gets storage); idle fires → `process_sd()` →
+  `tinyusb_msc_storage_mount()` → FatFS does a REAL fresh mount each cycle. No stale state.
+- **Why fopen fails: UNKNOWN** — requires serial log capture to see errno. Filesystem is clean,
+  card initialized, plenty of free space. Failure is inside FatFS during cluster/directory write.
 
 **Branch:** `main`  
 **Last committed:** `deecb30`  
@@ -63,6 +70,56 @@ fix host-controller-level EPROTO. If a Pi reboot fixes enumeration, document it 
 - Admin PowerShell: `usbipd bind --busid <bus-id>` (one-time bind, persists until unbound).
 - WSL: `"/mnt/c/Program Files/usbipd-win/usbipd.exe" attach --wsl --busid <bus-id>`
 - Flash with WSL esptool. See prior handoffs for exact command.
+
+---
+
+## Session Handoff — 2026-06-20 (Stage 5 — write_placeholder() failure isolated)
+
+**Goal:** Identify whether missing JSON is due to `write_placeholder()` silent failure or FatFS/Linux vfat coordination.
+
+**Test performed:**
+- Board on Pi USB hub, enumerating 303a:4003, sda1 visible.
+- Mounted sda1 rw, wrote CSV, synced, unmounted. User watched LCD.
+- Waited 8 seconds (> 5 s idle threshold). Mounted sda1 read-only. Checked for JSON.
+
+**Results:**
+
+| Observable | Expected | Actual | Verdict |
+|---|---|---|---|
+| LCD during idle | CYAN→YELLOW→BLUE→GREEN | YELLOW (write), brief blink (BLUE), GREEN | **PASS — process_sd() ran** |
+| weldml_result.json (read-only mount) | Present | **NOT FOUND** | **FAIL** |
+| Raw disk scan (`dd \| strings \| grep pending_parse`) | 1+ hits | **0 hits** | **Never written** |
+| FAT filesystem health (`fsck.vfat -n`) | Clean | 8 files, 8/948992 clusters, no errors | **HEALTHY** |
+
+**Root cause confirmed: `write_placeholder()` silent fopen failure.**
+
+`fopen("/sdcard/weldml_result.json", "w")` returns NULL. The function logs an error and returns.
+`process_sd()` does not check the return, proceeds to `tinyusb_msc_storage_unmount()` and
+`set_state(WELD_STATE_SUCCESS)` → LCD GREEN. JSON never written.
+
+**FAT coordination theory ruled out:**
+The prior session's hypothesis (FatFS stale cache from startup mount causing cluster conflict)
+was incorrect. Reading `tusb_msc_storage.c` confirms:
+- `tud_mount_cb()` calls `tinyusb_msc_storage_unmount()` — host connecting gives host storage access
+- `tud_umount_cb()` calls `tinyusb_msc_storage_mount()` — host disconnecting reclaims for FatFS
+- `process_sd()` → `tinyusb_msc_storage_mount()` is a REAL fresh FatFS mount (not a no-op)
+- The write-idle coordination is architecturally correct
+
+**Why fopen fails: unknown** — requires serial log. FAT is clean, card initialized, 948984 free clusters.
+Failure is inside FatFS during cluster allocation or directory write — exact errno not visible without logs.
+
+**Next session — fix and diagnose:**
+1. Fix `write_placeholder()`: change return type to `bool`, return false when fopen fails.
+   Fix `process_sd()`: call `set_state(WELD_STATE_FAILURE)` if write_placeholder() returns false.
+   Add errno logging: `ESP_LOGE(TAG, "fopen failed errno=%d", errno)` before returning false.
+2. Build: `idf.py -D BOARD=waveshare-esp32-s3-lcd-147 build`
+3. Flash: direct-PC USB (usbipd-win → WSL). See flash procedure in recovery handoff below.
+4. Run write test. If LCD shows RED → serial log has the errno.
+5. Start passive serial read BEFORE triggering write test:
+   `ssh casey@192.168.1.43 "python3 -c 'import serial; s=serial.Serial(\"/dev/ttyACM0\",115200,timeout=0.2); [print(s.read(2048).decode(errors=\"replace\"),end=\"\") for _ in range(200)]'" > /tmp/proc_log.txt &`
+   Then mount/write/umount. After 15 s: `cat /tmp/proc_log.txt`. Look for fopen errno.
+
+**Do NOT start Stage 6.** Fix and diagnose the fopen failure first.
 
 ---
 
@@ -930,7 +987,8 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 | Pi USB host recovery (reboot) | Waveshare | Pi USB | 2026-06-20 | **PASS** | Pi reboot cleared dwc_otg EPROTO. 303a:1001→303a:4003 PHY switch clean after reboot. |
 | Linux USB MSC enumeration | Waveshare | Pi USB (sda1) | 2026-06-20 | **PASS** | sda/sda1 29 GiB, write-through, TinyUSB Flash Storage 0.2. No SCSI errors. |
 | Linux MSC write (CSV files) | Waveshare | Pi USB (sda1) | 2026-06-20 | **PASS** | CSV files written by Pi confirmed physically on SD (survived drop_caches + remount). |
-| Write-idle detection (Pi host) | Waveshare | Pi USB | 2026-06-20 | **UNVERIFIED** | JSON not found after 8 s idle. LCD color not reported. May be FAT conflict (FatFS + Linux vfat) or write_placeholder() silent failure. See handoff for root cause analysis. |
+| Write-idle detection (Pi host) | Waveshare | Pi USB | 2026-06-20 | **CONFIRMED** | LCD: CYAN→YELLOW→BLUE(brief)→GREEN. process_sd() runs. tud_msc_write10_complete_cb fires. |
+| JSON write (Pi host) | Waveshare | Pi USB | 2026-06-20 | **FAIL** | write_placeholder() fopen returns NULL. JSON never written (raw disk scan = 0 hits). FAT clean. |
 
 ---
 
@@ -995,24 +1053,25 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 
 ## What Is Next
 
-1. **Stage 5 — confirm write-idle detection and JSON write on Pi (Linux host).**
-   Board is currently on Pi USB hub, enumerating as 303a:4003. Next test:
-   - Ask user to watch LCD before writing CSV.
-   - Mount sda1, write CSV, sync, umount. Watch for CYAN→YELLOW→BLUE→GREEN.
-   - After idle fires: mount READ-ONLY (`mount -o ro /dev/sda1`) to avoid dirty-bit write.
-   - Check for `weldml_result.json`. If present: confirm write-idle works on Pi. Done.
-   - If absent but LCD went GREEN: FAT conflict (Linux raw writes overwrite FatFS JSON). Fix needed.
-   - If LCD stayed CYAN: `tud_msc_write10_complete_cb` not firing. Investigate.
+1. **Fix `write_placeholder()` silent failure (immediate — required before Stage 6).**
+   `fopen(RESULT_PATH, "w")` returns NULL but the function doesn't propagate failure. Fix:
+   - `write_placeholder()` must return `bool` (false if fopen returns NULL)
+   - `process_sd()` must call `set_state(WELD_STATE_FAILURE)` if `write_placeholder()` returns false
+   - After fix, RED instead of GREEN tells us immediately when JSON write fails
+   Flash via direct-PC USB (usbipd-win → WSL). Always use `-D BOARD=waveshare-esp32-s3-lcd-147`.
 
-2. **Fix write_placeholder() silent failure bug (required before Stage 6).**
-   If `fopen(RESULT_PATH, "w")` fails, board shows GREEN anyway (SUCCESS).
-   `write_placeholder()` must return bool; `process_sd()` must call `set_state(WELD_STATE_FAILURE)`
-   on false. One-line fix. Apply via direct-PC USB flash after isolating root cause.
+2. **Capture serial log during write-idle cycle to find fopen root cause.**
+   After applying fix and reflashing, run the write test. Expected: LCD shows RED.
+   Capture ESP serial output during/after process_sd() to see:
+   - `ESP_LOGE: Cannot write result to /sdcard/weldml_result.json` → add errno log
+   - `ESP_LOGI: Placeholder: ... -> ...` → if this appears, fclose is the failure
+   Use Pi passive serial read before process_sd() triggers:
+   `ssh casey@192.168.1.43 "python3 -c 'import serial; s=serial.Serial(\"/dev/ttyACM0\",115200,timeout=0.2); [print(s.read(2048).decode(errors=\"replace\"),end=\"\") for _ in range(200)]'" > /tmp/proc_log.txt &`
+   Then run write test. After 10s: `cat /tmp/proc_log.txt`.
+   Serial output stops when TinyUSB takes over USB PHY, but process_sd() happens LATER — it goes
+   through FatFS/SPI, not USB. May still get ESP logs if CDC serial is readable at that point.
 
-3. **Stage 5 flash path:** Direct-PC USB via usbipd-win (confirmed). Pi RFC2217 may work after
-   reboot but not re-tested. Always use `-D BOARD=waveshare-esp32-s3-lcd-147` on every idf.py call.
-
-4. **Add `workbench.local` to WSL `/etc/hosts`** — `echo "192.168.1.43 workbench.local" | sudo tee -a /etc/hosts`.
+3. **Add `workbench.local` to WSL `/etc/hosts`** — `echo "192.168.1.43 workbench.local" | sudo tee -a /etc/hosts`.
 
 ---
 
