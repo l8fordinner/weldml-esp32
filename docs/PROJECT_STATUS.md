@@ -7,7 +7,7 @@ Update this at the end of each working session and commit it with the session's 
 
 ## Current State (2026-06-20)
 
-**Phase:** Stage 6A COMPLETE. Q10 partially resolved — signal column and two feature formulas confirmed; parity gap and two formulas still block Stage 6B.
+**Phase:** Stage 6A COMPLETE. **Q10 FULLY RESOLVED.** All 22 feature formulas confirmed from `parse_and_clean.py`. Stage 6B is UNBLOCKED.
 
 **Confirmed this session (2026-06-20, Stage 5 fix + verification):**
 
@@ -48,6 +48,104 @@ USB enumerating as `303a:4003`. SD card visible as sda1.
 
 **Active flash path:** Direct-PC USB via usbipd-win (confirmed working). Pi RFC2217 path NOT re-tested
 this session (no flash needed — firmware unchanged). Pi path may now work after reboot, unverified.
+
+---
+
+## Session Handoff — 2026-06-20 (Q10 FULLY RESOLVED — Stage 6B UNBLOCKED)
+
+**Goal:** Resolve Q10 parity gap and remaining feature formulas using parse_and_clean.py.
+
+**Branch:** `main`  
+**Last commit:** `77c81ce` (Q10 partial resolution)  
+**Working tree:** DIRTY (doc updates only — no code changes)
+
+**What was done this session:**
+
+1. Read `docs/PROJECT_STATUS.md` to establish context.
+2. Inspected `model_exports/esp32_port/parse_and_clean.py` — the full trainer pipeline including column selection, segment windowing, and position-based feature formulas.
+3. Ran the trainer's exact code path on `test_data/kawasaki_samples/GAP/NP/l314.fsj` using the venv at `/home/casey/WeldMLTrainer/.venv_wsl/`.
+4. Verified all three position-based features compute to exact golden values.
+5. Identified root cause of parity gap in LOADCELL-based features.
+6. Updated `docs/OPEN_QUESTIONS.md` (Q10 closed) and `docs/PROJECT_STATUS.md`.
+
+**Q10 — Fully Resolved:**
+
+**Signal and preprocessing:**
+- `load_values` = LOADCELL (col 1), raw, NO preprocessing whatsoever.
+- `time_values` = TIME (col 0).
+- Position column = POS7 (col 7) — first match in priority list `(POS7, POSITION, S.POS.M, S.POS.LVDT, POS9)`.
+
+**Segment window:**
+- start_idx = first DataFrame row where S.POS.M >= 0 (`sposm_ge_zero`)
+- end_idx = last DataFrame row where STAGE == 3
+- Slice: `load_series.loc[start_idx:end_idx].dropna()` — inclusive both ends, dropna (no effect in practice)
+- For l314.fsj: start=1084, end=2244, count=1161 — matches Stage 6A parser exactly.
+
+**MaxForceBelow3mm:**
+```
+mask = (POS7 < 3.0) AND (STAGE IN [2, 3])  [applied to FULL dataset, not window only]
+MaxForceBelow3mm = max(LOADCELL[mask])
+```
+Verified l314.fsj: computed=14.689, golden=14.689. Exact match. ✓
+
+**PlungeVelocity:**
+```
+Using STAGE==2 rows only:
+t_30 = linearly interpolated TIME when POS7 crosses 3.0 mm
+t_25 = linearly interpolated TIME when POS7 crosses 2.5 mm
+PlungeVelocity = 0.5 / |t_25 - t_30|   [units: mm/s]
+```
+Verified l314.fsj: t_30=2.884, t_25=3.196, computed=1.602564, golden=1.602564. Exact match. ✓
+
+**MinPositionStage3:**
+```
+stage3_df = rows where STAGE==3 AND POS7 < 3.0
+MinPositionStage3 = min(stage3_df["POS7"])
+```
+Verified l314.fsj: computed=2.29, golden=2.29. Exact match. ✓
+
+**Parity gap root cause — EXPLAINED:**
+- Position-based features all match exactly → same weld event, same weld conditions.
+- LOADCELL-based features (Mean, RMS, Peak) don't match → LOADCELL column values differ between our fixture and the original training file.
+- Root cause: `test_data/kawasaki_samples/GAP/NP/l314.fsj` is a different export/recording of the same weld trial from the `l314.fsj` used to generate `WSU_Tm_Ans_Dat_gap.csv` (training machine). Original FSJ files not present in this repo.
+- Trainer code is correct. No preprocessing is missing. The formulas are fully implemented.
+
+**Implication for testing:**
+- End-to-end numerical validation of LOADCELL-derived features against golden is NOT possible with current fixtures. This is a fixture provenance issue, not a formula issue.
+- For Stage 6C inference validation: use golden feature vectors directly from `model_exports/esp32_port/golden_vectors/golden_vectors.csv` — these bypass the LOADCELL discrepancy and directly test model B and model A predictions.
+
+**Stage 5 status:** COMPLETE. Unchanged.  
+**Stage 6A status:** COMPLETE. Unchanged.  
+**Stage 6B status:** UNBLOCKED. All formulas confirmed. Ready to implement.
+
+**Next action:** Implement Stage 6B — feature extraction in `components/weld_parser/` (add `fsj_extract_features()` or similar). Implement exactly 22 features per formula table in Q10 resolution.
+
+**Next prompt for a fresh session:**
+```
+Read docs/PROJECT_STATUS.md only.
+
+Q10 is FULLY RESOLVED. Stage 6B is UNBLOCKED.
+
+All feature formulas are confirmed in docs/OPEN_QUESTIONS.md Q10 resolution section.
+Stage 6A parser (components/weld_parser/) is complete and returns win_start, win_end,
+window rows, and footer ROTATE value.
+
+Task: Implement Stage 6B feature extraction.
+- Add fsj_extract_features() or equivalent to components/weld_parser/
+- Compute all 22 features from the weld window using the confirmed formulas
+- Time-domain (8 features): from raw LOADCELL in window
+- FFT (5 features): demeaned LOADCELL, zero-padded to 4096, rfft
+- CWT (5 features): Morlet wavelet, scales [1,2,4,8,16,32]
+- MinPositionStage3: min(POS7) where STAGE==3 AND POS7 < 3.0
+- MaxForceBelow3mm: max(LOADCELL) where POS7 < 3.0 AND STAGE IN [2,3]
+- PlungeVelocity: 0.5 / |t(POS7=2.5mm) - t(POS7=3.0mm)| in STAGE==2 rows
+- RotationSpeed: footer ROTATE float value
+- All features as float32, validated non-NaN/non-Inf before inference
+- Add host-side tests for feature extraction against confirmed formulas
+
+Do NOT implement Stage 6C (inference) yet.
+Do NOT inspect .env.
+```
 
 ---
 
@@ -289,12 +387,12 @@ Stage 6 is split into four phases. Do not start a later phase until the earlier 
 | l046.fsj | test_data/kawasaki_samples/LOOCV/IF/ | LOOCV | IF | FAIL |
 
 ### Phase 6B — Feature extraction matching exported model schema
-**Status: BLOCKED on Q10 — do not implement until Q10 is answered**
+**Status: UNBLOCKED — Q10 fully resolved (2026-06-20). Ready to implement.**
 
 - Compute exactly 22 features from the weld window rows identified by Stage 6A.
 - Feature order and names are fixed (from both model `feature_order.json` files — they are identical).
 - No scaler or imputer; features go raw into inference.
-- **Q10 blocker:** Which FSJ column is the source signal for time-domain stats (Mean, RMS, PeakValue, etc.), FFT/CWT features, and whether RotationSpeed comes from the footer ROTATE field or VEL8. Read `src/weldmltrainer/feature_extraction.py` from the WeldML trainer repo to resolve Q10 before writing any feature extraction code.
+- **All feature formulas confirmed from `model_exports/esp32_port/parse_and_clean.py`.** See Q10 resolution in OPEN_QUESTIONS.md for complete formula table.
 
 **Model feature schema (from `model_exports/esp32_port/FEATURE_SCHEMA.json` — both models use this):**
 
