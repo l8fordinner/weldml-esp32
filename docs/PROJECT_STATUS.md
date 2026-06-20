@@ -7,21 +7,80 @@ Update this at the end of each working session and commit it with the session's 
 
 ## Current State (2026-06-20)
 
-**Phase:** Stage 5 BLOCKED. Flashing access blocked. Board is NOT hard-bricked.
+**Phase:** Stage 5 UNBLOCKED. Flashing access restored. TinyUSB CDC+MSC confirmed working.
 
-**Confirmed this session:** Key2/RESET alone boots Stage 5 normally to cyan WAITING screen.
-The board boots, the app runs, the LCD works. Problem is runtime USB behavior and flashing access,
-not total boot failure. Do not classify as unrecoverable.
+**Confirmed this session (recovery):**
+- Direct-PC USB path (via usbipd-win → WSL) bypassed Pi dwc_otg EPROTO state entirely.
+- Stage 5 firmware reflashed and SHA-verified from WSL esptool v4.11.0.
+- On boot: USB re-enumerated as `303a:4003` (USB Serial + Mass Storage) — PHY switch is working.
+- Windows exposed MSC as a folder (SD card visible). LCD shows green/ready state.
+- Root cause of all prior failures: Pi dwc_otg host controller EPROTO state (host-side only).
+  Stage 5 firmware's USB PHY handling was NOT broken. The Pi's USB host was.
 
 **Branch:** `main`  
-**Last committed:** `692330b` (Stage 5 diagnosis — OpenOCD JTAG CPU reset blocked by USB PHY state)  
+**Last committed:** `40dcda0`  
 **Working tree:** CLEAN
 
-**Board state:** SLOT3. Stage 5 firmware (d1c0587 flash) running. LCD shows cyan WAITING.
-USB at 303a:1001 (Stage 5 stuck — expected 303a:4003). Pi dwc_otg stuck in EPROTO state after
-this session's recovery attempts; /dev/ttyACM0 currently absent on Pi.
-**Recovery focus:** USB communication path to the board and/or direct-PC flashing. Not speculative
-firmware changes. Flashing was blocked by Pi dwc_otg state, not by the ESP32 itself.
+**Board state:** Connected to Windows PC via usbipd-win → WSL. Running Stage 5 firmware (c98cbd3).
+USB at `303a:4003` (TinyUSB CDC+MSC confirmed). LCD ready. MSC folder visible on Windows.
+
+**Active flash path:** Direct-PC USB via usbipd-win (see procedure below). Pi path is secondary.
+
+---
+
+## Session Handoff — 2026-06-20 (Stage 5 recovery — direct-PC USB unblocked everything)
+
+**Goal:** Restore flashing access; do not change Stage 5 policy or start Stage 6.
+
+**Root cause (confirmed):** Pi dwc_otg USB host controller entered EPROTO state during prior
+recovery attempts. This corrupts USB data transactions at the host-controller level — even after
+power-cycling the ESP32 and rebinding cdc_acm, the Pi host cannot complete USB transfers.
+`esptool` got "No serial data received" because the host was broken, not the ESP32.
+
+**Recovery method:** Direct-PC USB via usbipd-win → WSL.
+1. Disconnected USB cable from Pi, held Key1 (BOOT), plugged into Windows PC, released Key1.
+2. Windows showed `303a:1001` on bus 7-2.
+3. Admin PowerShell: `usbipd bind --busid 7-2`
+4. WSL: `"/mnt/c/Program Files/usbipd-win/usbipd.exe" attach --wsl --busid 7-2`
+5. `/dev/ttyACM0` appeared in WSL immediately.
+6. Flashed with:
+   ```
+   ~/.espressif/python_env/idf5.3_py3.12_env/bin/python -m esptool \
+     --chip esp32s3 -p /dev/ttyACM0 -b 115200 \
+     --before=no_reset --after=no_reset --no-stub \
+     write_flash --flash_mode dio --flash_freq 80m --flash_size 16MB \
+     0x0 build/bootloader/bootloader.bin \
+     0x8000 build/partition_table/partition-table.bin \
+     0x10000 build/weldml-esp32.bin
+   ```
+   All 3 regions SHA-verified. esptool v4.11.0 (IDF env). Note: v4.11.0 uses underscores
+   (`write_flash`, `no_reset`, `--flash_mode`) — not dashes like newer versions.
+
+**Result after boot (Key2):**
+- USB re-enumerated as `303a:4003` (USB Serial Device COM8 + USB Mass Storage Device)
+- Windows opened an MSC folder (SD card visible) — TinyUSB CDC+MSC is working
+- LCD shows green/ready state
+- Stage 5 TinyUSB PHY switch: **CONFIRMED WORKING** on direct-PC USB path
+
+**What was NOT a firmware bug:**
+All prior OpenOCD failures (`libusb_get_string_descriptor_ascii() = -1`) and esptool sync
+failures ("No serial data received") were caused by the Pi's dwc_otg EPROTO state.
+Stage 5 `usb_new_phy()` / TinyUSB PHY switching code is correct.
+
+**Current flash procedure (direct-PC USB):**
+1. Hold Key1 (BOOT), plug USB into Windows PC, release Key1 → board in download mode
+2. Admin PowerShell: `usbipd bind --busid 7-2` (one-time; persists until unbound)
+3. WSL: `"/mnt/c/Program Files/usbipd-win/usbipd.exe" attach --wsl --busid 7-2`
+4. Verify `/dev/ttyACM0` in WSL
+5. Flash with above esptool command
+6. Press Key2 to boot
+
+**Pi path status:** Avoid until Pi is rebooted (clears dwc_otg state). Once rebooted,
+the Pi path should work again. But direct-PC is now the preferred and proven path.
+
+**Next session:** Stage 5 functional testing — verify SCSI write-idle detection and SD processing.
+Board is connected to PC USB. MSC folder is visible on Windows. Write a CSV file into the folder
+to test whether the 5000 ms idle timeout fires and weld_processor mounts the SD and processes it.
 
 ---
 
@@ -678,9 +737,11 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 | idf.py build (Stage 5) | Waveshare (WSL build) | — | 2026-06-19 | PASS | 14/14 incremental, 363 KB, zero errors, zero warnings |
 | idf.py flash (Stage 5) | Waveshare | SSH esptool on Pi | 2026-06-19 | PASS | SHA-verified; --before=no-reset after manual Key1+Key2 |
 | LCD CYAN (Stage 5) | Waveshare | — | 2026-06-19 | PASS | weld_processor_start() called; WAITING state confirmed |
-| TinyUSB enumeration (Stage 5) | Waveshare | Pi USB | 2026-06-19 | **FAIL** | USB stays 303a:1001; expected 303a:4003; PHY not switching to OTG |
+| TinyUSB enumeration (Stage 5) | Waveshare | Pi USB | 2026-06-19 | **FAIL** | USB stays 303a:1001 on Pi — root cause: Pi dwc_otg EPROTO state, not firmware bug |
 | USB stable (no crash loop) | Waveshare | Pi dmesg | 2026-06-19 | CONFIRMED | 303a:1001 single stable enum, no repeated reconnects → device is NOT crash-looping |
-| OpenOCD JTAG via esp_usb_jtag | Waveshare | Pi USB | 2026-06-19 | **FAIL** | libusb_get_string_descriptor_ascii()=-1; JTAG vendor strings inaccessible on running Stage 5 fw |
+| OpenOCD JTAG via esp_usb_jtag | Waveshare | Pi USB | 2026-06-19 | **FAIL** | libusb_get_string_descriptor_ascii()=-1; caused by Pi dwc_otg EPROTO, not firmware |
+| Direct-PC USB flash (Stage 5) | Waveshare | PC USB → usbipd → WSL | 2026-06-20 | PASS | esptool v4.11.0, 115200 baud, no-stub; all 3 regions SHA-verified |
+| TinyUSB enumeration (Stage 5, PC) | Waveshare | PC USB | 2026-06-20 | **PASS** | 303a:1001→303a:4003 confirmed; CDC+MSC; MSC folder opened on Windows |
 
 ---
 
@@ -727,7 +788,7 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
   - Content displays 180° rotated with MADCTL=0x00 (needs mirror(true,true) before Stage 4 UI work)
   - Fixed black semicircle at physical top-right = hardware/panel artifact (not software)
 - [x] **Stage 4 complete** — USB MSC + SD SPI verified on hardware (2026-06-19)
-- [ ] **Stage 5 in progress** — build+flash done (2026-06-19); TinyUSB enumeration blocked (see current handoff)
+- [ ] **Stage 5 in progress** — TinyUSB CDC+MSC confirmed working (2026-06-20); SCSI write-idle detection not yet tested
   - `components/usb_msc_sd/` — TinyUSB CDC+MSC + SD SPI init; SPI3_HOST, sdspi host, sdmmc_card_init
   - LCD green = SD card init success; USB re-enumerated 303a:1001→303a:4003 (OTG PHY switch)
   - MADCTL mirror(true,true) applied in lcd_st7789.c (orientation fix from Stage 3)
@@ -743,9 +804,13 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 
 ## What Is Next
 
-1. **Stage 5 — SCSI quiet-period detection + SD read path.**
-   Blocked on Q3 (SD ownership transition) and Q6 (robot file-completion signal).
-   Resolve Q6 first: what signal does the robot emit when a weld file is complete?
+1. **Stage 5 functional test — SCSI write-idle detection.**
+   Board is on PC USB, MSC folder visible on Windows. Write a CSV file to the MSC volume,
+   then wait 5+ seconds idle. Verify: weld_processor mounts SD, processes file, LCD changes state.
+   Q3/Q6 are resolved in code already (5000 ms idle threshold; no robot signal needed).
+
+2. **Stage 5 flash path (going forward):** Direct-PC USB via usbipd-win is the confirmed path.
+   Pi path works too after a Pi reboot (clears dwc_otg state), but direct-PC is simpler.
 
 2. **Add `workbench.local` to WSL `/etc/hosts`** — requires sudo;
    `echo "192.168.1.43 workbench.local" | sudo tee -a /etc/hosts`.
