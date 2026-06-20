@@ -7,21 +7,25 @@ Update this at the end of each working session and commit it with the session's 
 
 ## Current State (2026-06-20)
 
-**Phase:** Stage 5 BLOCKED. Instrumented build done. Both esptool and OpenOCD paths fail.
-Device in unrecoverable USB state: ROM bootloader non-responsive (sync fails), JTAG vendor strings
-disabled (OpenOCD init fails). Root cause: `usb_new_phy()` in Stage 5 firmware partially disabled
-USB JTAG without properly enabling OTG. Requires firmware fix or full erase via alternative method.
+**Phase:** Stage 5 BLOCKED. Flashing access blocked. Board is NOT hard-bricked.
+
+**Confirmed this session:** Key2/RESET alone boots Stage 5 normally to cyan WAITING screen.
+The board boots, the app runs, the LCD works. Problem is runtime USB behavior and flashing access,
+not total boot failure. Do not classify as unrecoverable.
 
 **Branch:** `main`  
-**Last committed:** `c98cbd3` (Stage 5 diagnosis — add tinyusb_driver_install return-code logging)  
-**Working tree:** CLEAN (will add STATUS.md update)
+**Last committed:** `692330b` (Stage 5 diagnosis — OpenOCD JTAG CPU reset blocked by USB PHY state)  
+**Working tree:** CLEAN
 
-**Board state:** SLOT3. Stage 5 firmware still running (d1c0587 flash). USB at 303a:1001, stable, non-responsive.
-**Diagnostic status:** OpenOCD JTAG reset failed; esptool sync fails; both paths blocked by Stage 5 USB PHY state.
+**Board state:** SLOT3. Stage 5 firmware (d1c0587 flash) running. LCD shows cyan WAITING.
+USB at 303a:1001 (Stage 5 stuck — expected 303a:4003). Pi dwc_otg stuck in EPROTO state after
+this session's recovery attempts; /dev/ttyACM0 currently absent on Pi.
+**Recovery focus:** USB communication path to the board and/or direct-PC flashing. Not speculative
+firmware changes. Flashing was blocked by Pi dwc_otg state, not by the ESP32 itself.
 
 ---
 
-## Session Handoff — 2026-06-20 (Stage 5 — power-cycle download mode FAILED to unblock esptool sync)
+## Session Handoff — 2026-06-20 (Stage 5 recovery — Pi dwc_otg stuck, all esptool paths blocked)
 
 **Goal:** Execute documented power-cycle download-mode sequence to resolve esptool sync failure.
 
