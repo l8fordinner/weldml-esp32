@@ -35,3 +35,9 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 # espressif/esp_tinyusb ^1.4.2 required (see idf_component.yml)
 CONFIG_TINYUSB_CDC_ENABLED=y
 CONFIG_TINYUSB_MSC_ENABLED=y
+
+# FatFS — enable long filename support on heap
+# Required: weldml_result.json exceeds 8.3 FAT limit; CSV files written by
+# Linux/Windows also use LFN. Without this, fopen() on any non-8.3 path fails.
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=64

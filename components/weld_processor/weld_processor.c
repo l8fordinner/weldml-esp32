@@ -3,6 +3,7 @@
 #include <dirent.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -136,12 +137,12 @@ static bool find_any_file(char *out_path, size_t path_len, time_t *out_mtime)
     return found;
 }
 
-static void write_placeholder(const char *src_path, time_t src_mtime)
+static bool write_placeholder(const char *src_path, time_t src_mtime)
 {
     FILE *f = fopen(RESULT_PATH, "w");
     if (!f) {
-        ESP_LOGE(TAG, "Cannot write result to %s", RESULT_PATH);
-        return;
+        ESP_LOGE(TAG, "fopen(%s) failed errno=%d", RESULT_PATH, errno);
+        return false;
     }
 
     /* FAT mtime has 2-second resolution and is not always set by all hosts. */
@@ -155,13 +156,22 @@ static void write_placeholder(const char *src_path, time_t src_mtime)
     const char *name = strrchr(src_path, '/');
     name = name ? name + 1 : src_path;
 
-    fprintf(f,
+    int wr = fprintf(f,
             "{\"source\":\"%s\",\"mtime\":\"%s\","
             "\"stage\":5,\"status\":\"pending_parse\",\"result\":null}\n",
             name, mtime_str);
-    fclose(f);
-
-    ESP_LOGI(TAG, "Placeholder: %s -> %s", src_path, RESULT_PATH);
+    bool ok = (wr > 0) && (fflush(f) == 0);
+    if (!ok) {
+        ESP_LOGE(TAG, "write to %s failed errno=%d", RESULT_PATH, errno);
+    }
+    if (fclose(f) != 0) {
+        ESP_LOGE(TAG, "fclose(%s) failed errno=%d", RESULT_PATH, errno);
+        ok = false;
+    }
+    if (ok) {
+        ESP_LOGI(TAG, "Placeholder: %s -> %s", src_path, RESULT_PATH);
+    }
+    return ok;
 }
 
 static void process_sd(void)
@@ -188,24 +198,35 @@ static void process_sd(void)
         found = find_any_file(src_path, sizeof(src_path), &src_mtime);
     }
 
+    bool write_ok;
     if (found) {
         ESP_LOGI(TAG, "Newest file: %s (mtime=%lld)", src_path, (long long)src_mtime);
-        write_placeholder(src_path, src_mtime);
+        write_ok = write_placeholder(src_path, src_mtime);
     } else {
         ESP_LOGW(TAG, "No files on SD card — writing empty placeholder");
-        /* Still write a result so caller knows processing ran. */
         FILE *f = fopen(RESULT_PATH, "w");
-        if (f) {
-            fprintf(f, "{\"source\":null,\"mtime\":null,"
-                       "\"stage\":5,\"status\":\"no_files\",\"result\":null}\n");
-            fclose(f);
+        if (!f) {
+            ESP_LOGE(TAG, "fopen(%s) failed errno=%d", RESULT_PATH, errno);
+            write_ok = false;
+        } else {
+            int wr = fprintf(f, "{\"source\":null,\"mtime\":null,"
+                               "\"stage\":5,\"status\":\"no_files\",\"result\":null}\n");
+            bool ok = (wr > 0) && (fflush(f) == 0);
+            if (!ok) {
+                ESP_LOGE(TAG, "write to %s failed errno=%d", RESULT_PATH, errno);
+            }
+            if (fclose(f) != 0) {
+                ESP_LOGE(TAG, "fclose(%s) failed errno=%d", RESULT_PATH, errno);
+                ok = false;
+            }
+            write_ok = ok;
         }
     }
 
-    /* Unmount: sets is_fat_mounted=false → USB host gets "ready" on next SCSI poll. */
+    /* Always unmount: returns MSC control to host on both success and failure. */
     tinyusb_msc_storage_unmount();
 
-    set_state(WELD_STATE_SUCCESS);
+    set_state(write_ok ? WELD_STATE_SUCCESS : WELD_STATE_FAILURE);
 }
 
 static void monitor_task(void *arg)

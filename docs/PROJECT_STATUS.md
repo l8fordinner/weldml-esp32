@@ -7,28 +7,41 @@ Update this at the end of each working session and commit it with the session's 
 
 ## Current State (2026-06-20)
 
-**Phase:** Stage 5 Linux/Pi MSC verification — write-idle detection confirmed, `write_placeholder()` silently failing.
+**Phase:** Stage 5 COMPLETE — Linux/Pi and Windows MSC paths both verified. JSON write confirmed on hardware.
 
-**Confirmed this session (2026-06-20, JSON diagnosis):**
-- Write-idle detection confirmed on Pi: LCD went CYAN → YELLOW (writing) → BLUE (brief blink) → GREEN.
-  `tud_msc_write10_complete_cb` fires. Monitor task detects idle. `process_sd()` runs.
-- `weldml_result.json` NOT found after controlled read-only remount (no dirty-bit write from host
-  after process_sd()). Confirmed by raw disk scan (`dd | strings | grep pending_parse` → 0 hits).
-- FAT filesystem is healthy: `fsck.vfat -n /dev/sda1` → 8 files, 8/948992 clusters, no errors.
-- **Root cause isolated: `write_placeholder()` fails silently.**
-  `fopen("/sdcard/weldml_result.json", "w")` returns NULL. Function logs ESP_LOGE (invisible without
-  serial monitor) and returns. `process_sd()` proceeds to `set_state(WELD_STATE_SUCCESS)` → GREEN.
-  This is the documented bug (known since Stage 5 functional test on Windows).
-- **FAT coordination theory ruled out.** The `tud_mount_cb`/`tud_umount_cb` callbacks in
-  `tusb_msc_storage.c` correctly manage `is_fat_mounted`: host connects → `tud_mount_cb` →
-  `tinyusb_msc_storage_unmount()` (host gets storage); idle fires → `process_sd()` →
-  `tinyusb_msc_storage_mount()` → FatFS does a REAL fresh mount each cycle. No stale state.
-- **Why fopen fails: UNKNOWN** — requires serial log capture to see errno. Filesystem is clean,
-  card initialized, plenty of free space. Failure is inside FatFS during cluster/directory write.
+**Confirmed this session (2026-06-20, Stage 5 fix + verification):**
+
+**Root cause found and fixed:**
+- `write_placeholder()` was returning `void` and silently discarding fopen failure.
+- Root cause of fopen failure: `CONFIG_FATFS_LFN_NONE=y` — FatFS had no long filename support.
+  `"weldml_result.json"` (13-char base + 4-char extension) exceeds 8.3 FAT limits → fopen returns NULL.
+- Fix 1: `write_placeholder()` now returns `bool`; logs `errno` and full path on fopen/write/flush/close failure.
+- Fix 2: `process_sd()` checks return value; calls `set_state(WELD_STATE_FAILURE)` → RED if write fails.
+- Fix 3: `boards/waveshare-esp32-s3-lcd-147/sdkconfig.defaults` — added `CONFIG_FATFS_LFN_HEAP=y` + `CONFIG_FATFS_MAX_LFN=64`.
+- Unmount always runs on both success and failure paths (was already correct; confirmed unchanged).
+
+**Linux/Pi MSC test — PASS (2026-06-20):**
+- CSV written via Pi (`weld_linux2.csv`), sync, unmount.
+- LCD: CYAN → YELLOW → GREEN.
+- `weldml_result.json` confirmed on SD card (read-only mount after idle):
+  `{"source":"weld_linux2.csv","mtime":"2026-06-20T14:32:46Z","stage":5,"status":"pending_parse","result":null}`
+
+**Windows demo MSC test — PASS with documented behavior (2026-06-20):**
+- CSV written via Windows Explorer (`test_windows.csv`) to drive root.
+- LCD: CYAN → YELLOW → GREEN (confirmed clean cycle with no auto-write interference on second replug).
+- `weldml_result.json` confirmed written to SD card; visible in Windows Explorer after F5 refresh.
+- **Windows-specific behavior documented:**
+  1. Windows auto-writes System Volume Information / dirty-bit at mount time → triggers idle detection
+     before user copies a file. First cycle after mount processes whatever CSV was already on card.
+  2. Windows FAT timestamps are local time (no timezone). Pi/FatFS timestamps are UTC.
+     `find_newest` picks the file with the highest FAT mtime value — Pi-written CSVs appear "newer"
+     than Windows-copied files when local time < UTC. This is a FAT limitation, not a firmware bug.
+  3. JSON IS written correctly every cycle; unmount and MSC return work on Windows.
+  4. For Kawasaki demo: robot writes CSV at a known time; FAT mtime issue only affects Windows Explorer copies.
 
 **Branch:** `main`  
-**Last committed:** `deecb30`  
-**Working tree:** CLEAN
+**Last committed:** `7c8cf3d`  
+**Working tree:** DIRTY (changes ready to commit)
 
 **Board state:** Connected to Pi USB hub. Running Stage 5 firmware (c98cbd3 build, deecb30 committed).
 USB enumerating as `303a:4003`. SD card visible as sda1.
@@ -70,6 +83,48 @@ fix host-controller-level EPROTO. If a Pi reboot fixes enumeration, document it 
 - Admin PowerShell: `usbipd bind --busid <bus-id>` (one-time bind, persists until unbound).
 - WSL: `"/mnt/c/Program Files/usbipd-win/usbipd.exe" attach --wsl --busid <bus-id>`
 - Flash with WSL esptool. See prior handoffs for exact command.
+
+---
+
+## Session Handoff — 2026-06-20 (Stage 5 COMPLETE)
+
+**Stage 5 is done. Both Linux/Pi and Windows MSC paths verified. Do not re-examine Stage 5.**
+
+**What was fixed:**
+- `write_placeholder()`: changed `void` → `bool`; logs `errno` + path on every failure point (fopen, write, fflush, fclose).
+- `process_sd()`: checks `write_placeholder()` return; calls `set_state(WELD_STATE_FAILURE)` → RED on failure. GREEN only after confirmed write.
+- Unmount always runs on both success and failure (was already correct).
+- `boards/waveshare-esp32-s3-lcd-147/sdkconfig.defaults`: added `CONFIG_FATFS_LFN_HEAP=y` + `CONFIG_FATFS_MAX_LFN=64`.
+  **Root cause of silent failure: `CONFIG_FATFS_LFN_NONE=y`** — FatFS could not create `weldml_result.json`
+  because the name exceeds 8.3 FAT limits. LFN now enabled on heap.
+
+**Flash path used:** Pi-side esptool v5.2.0 via SSH. Key1+Key2 for download mode. Key2 to boot.
+  `ssh casey@192.168.1.43 "python3 -m esptool --chip esp32s3 -p /dev/ttyACM0 -b 115200 --before=no-reset --after=no-reset --no-stub write-flash --flash-mode dio --flash-freq 80m --flash-size 16MB 0x0 /tmp/bootloader.bin 0x8000 /tmp/partition-table.bin 0x10000 /tmp/weldml-esp32.bin"`
+
+**Linux/Pi test result — PASS:**
+| Observable | Result |
+|---|---|
+| LCD CYAN→YELLOW→GREEN | PASS |
+| weldml_result.json on SD (read-only mount) | PASS — source=weld_linux2.csv |
+| RED when write fails (pre-fix test) | PASS — confirmed before LFN fix |
+
+**Windows test result — PASS with documented behavior:**
+| Observable | Result |
+|---|---|
+| LCD CYAN→YELLOW→GREEN (clean cycle) | PASS |
+| weldml_result.json visible in Explorer after F5 | PASS |
+
+**Windows-specific behavior (document for demo):**
+1. Windows writes System Volume Information at first mount → triggers idle before user copies file.
+   On subsequent mounts (if SVI already current) → no auto-write → clean user-copy-driven cycle.
+2. Windows FAT mtime = local time; Pi FatFS mtime = UTC. `find_newest` picks highest mtime value,
+   so Pi-written files appear newer than Windows-copied files when local clock is behind UTC.
+   Not a firmware bug — FAT limitation. Robot CSV will have consistent timestamps.
+3. JSON IS written correctly each cycle. MSC returns to host on both success and failure.
+
+**Board state:** Connected to Windows PC USB. Running Stage 5 fixed firmware. LCD GREEN.
+**Branch:** `main`
+**Next:** Stage 6 — real CSV parser + weld model inference. Resolve Q8 first.
 
 ---
 
@@ -989,6 +1044,9 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 | Linux MSC write (CSV files) | Waveshare | Pi USB (sda1) | 2026-06-20 | **PASS** | CSV files written by Pi confirmed physically on SD (survived drop_caches + remount). |
 | Write-idle detection (Pi host) | Waveshare | Pi USB | 2026-06-20 | **CONFIRMED** | LCD: CYAN→YELLOW→BLUE(brief)→GREEN. process_sd() runs. tud_msc_write10_complete_cb fires. |
 | JSON write (Pi host) | Waveshare | Pi USB | 2026-06-20 | **FAIL** | write_placeholder() fopen returns NULL. JSON never written (raw disk scan = 0 hits). FAT clean. |
+| write_placeholder fix — RED on failure | Waveshare | Pi USB | 2026-06-20 | **PASS** | After fix, LCD shows RED when fopen fails. Root cause: CONFIG_FATFS_LFN_NONE — long filename unsupported. |
+| FatFS LFN enabled — JSON write (Pi host) | Waveshare | Pi USB | 2026-06-20 | **PASS** | weldml_result.json written and confirmed on read-only mount. source=weld_linux2.csv. LCD GREEN. |
+| Windows MSC write + JSON write | Waveshare | PC USB (Windows) | 2026-06-20 | **PASS** | CSV copied via Explorer. YELLOW→GREEN observed. JSON confirmed in Explorer after F5 refresh. |
 
 ---
 
@@ -1035,7 +1093,7 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
   - Content displays 180° rotated with MADCTL=0x00 (needs mirror(true,true) before Stage 4 UI work)
   - Fixed black semicircle at physical top-right = hardware/panel artifact (not software)
 - [x] **Stage 4 complete** — USB MSC + SD SPI verified on hardware (2026-06-19)
-- [ ] **Stage 5 in progress** — Linux/Pi USB MSC confirmed; write-idle detection and JSON write unverified
+- [x] **Stage 5 complete** — write-idle detection, JSON write, and MSC return verified on both Linux/Pi and Windows
   - `components/usb_msc_sd/` — TinyUSB CDC+MSC + SD SPI init; SPI3_HOST, sdspi host, sdmmc_card_init
   - LCD green = SD card init success; USB re-enumerated 303a:1001→303a:4003 (OTG PHY switch) — confirmed on both Windows and Pi
   - MADCTL mirror(true,true) applied in lcd_st7789.c (orientation fix from Stage 3)
@@ -1053,25 +1111,12 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 
 ## What Is Next
 
-1. **Fix `write_placeholder()` silent failure (immediate — required before Stage 6).**
-   `fopen(RESULT_PATH, "w")` returns NULL but the function doesn't propagate failure. Fix:
-   - `write_placeholder()` must return `bool` (false if fopen returns NULL)
-   - `process_sd()` must call `set_state(WELD_STATE_FAILURE)` if `write_placeholder()` returns false
-   - After fix, RED instead of GREEN tells us immediately when JSON write fails
-   Flash via direct-PC USB (usbipd-win → WSL). Always use `-D BOARD=waveshare-esp32-s3-lcd-147`.
+1. **Stage 5 is complete.** Proceed to Stage 6 when ready.
+   Stage 6 = real CSV parser + weld model inference. See `docs/MVP_REQUIREMENTS.md` for scope.
+   Resolve Q8 (weld file format) before writing the parser.
 
-2. **Capture serial log during write-idle cycle to find fopen root cause.**
-   After applying fix and reflashing, run the write test. Expected: LCD shows RED.
-   Capture ESP serial output during/after process_sd() to see:
-   - `ESP_LOGE: Cannot write result to /sdcard/weldml_result.json` → add errno log
-   - `ESP_LOGI: Placeholder: ... -> ...` → if this appears, fclose is the failure
-   Use Pi passive serial read before process_sd() triggers:
-   `ssh casey@192.168.1.43 "python3 -c 'import serial; s=serial.Serial(\"/dev/ttyACM0\",115200,timeout=0.2); [print(s.read(2048).decode(errors=\"replace\"),end=\"\") for _ in range(200)]'" > /tmp/proc_log.txt &`
-   Then run write test. After 10s: `cat /tmp/proc_log.txt`.
-   Serial output stops when TinyUSB takes over USB PHY, but process_sd() happens LATER — it goes
-   through FatFS/SPI, not USB. May still get ESP logs if CDC serial is readable at that point.
-
-3. **Add `workbench.local` to WSL `/etc/hosts`** — `echo "192.168.1.43 workbench.local" | sudo tee -a /etc/hosts`.
+2. **Add `workbench.local` to WSL `/etc/hosts`** (low priority housekeeping):
+   `echo "192.168.1.43 workbench.local" | sudo tee -a /etc/hosts`
 
 ---
 
