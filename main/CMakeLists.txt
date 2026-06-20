@@ -13,4 +13,5 @@ idf_component_register(
         lcd_st7789
         usb_msc_sd
         weld_processor
+        weld_parser
 )

@@ -7,7 +7,7 @@ Update this at the end of each working session and commit it with the session's 
 
 ## Current State (2026-06-20)
 
-**Phase:** Stage 5 COMPLETE. Stage 6 plan and architecture documented. Stage 6A is next — no code written yet.
+**Phase:** Stage 6A COMPLETE. Parser component implemented, all tests pass, firmware builds clean. Stage 6B blocked on Q10.
 
 **Confirmed this session (2026-06-20, Stage 5 fix + verification):**
 
@@ -48,6 +48,64 @@ USB enumerating as `303a:4003`. SD card visible as sda1.
 
 **Active flash path:** Direct-PC USB via usbipd-win (confirmed working). Pi RFC2217 path NOT re-tested
 this session (no flash needed — firmware unchanged). Pi path may now work after reboot, unverified.
+
+---
+
+## Session Handoff — 2026-06-20 (Stage 6A COMPLETE)
+
+**Goal:** Implement `components/weld_parser/` — FSJ parser contract, window detection, and host-side contract tests.
+
+**Branch:** `main`
+**Working tree:** CLEAN after commit
+
+**What was done this session:**
+
+1. Read `docs/PROJECT_STATUS.md`; confirmed Stage 5 complete and Stage 6A unblocked.
+2. Analyzed all four fixture files (`l314.fsj`, `l320.fsj`, `l060.fsj`, `l046.fsj`) to derive exact window bounds.
+3. Implemented `components/weld_parser/`:
+   - `weld_parser.h` — public API (`fsj_status_t`, `fsj_row_t`, `fsj_meta_t`, `fsj_result_t`, `fsj_parse_file`, `fsj_result_free`, `fsj_status_str`)
+   - `weld_parser.c` — single-pass streaming parser: header state machine, window detection, buffer growth, footer ROTATE extraction
+   - `CMakeLists.txt` — registered ESP-IDF component (no extra REQUIRES beyond libc)
+4. Added `components/weld_parser` to `main/CMakeLists.txt` REQUIRES.
+5. Implemented `test_host/test_weld_parser.c` + `test_host/Makefile` — 62 host-side checks.
+6. All 62 checks PASS: 4 fixture files × 15 checks each + 2 error-path checks.
+7. `idf.py -D BOARD=waveshare-esp32-s3-lcd-147 build` — PASS, zero errors, zero warnings.
+
+**Parser contract verified (all four fixtures):**
+
+| File | win_start | win_end | count | rotate | sample_rate |
+|------|-----------|---------|-------|--------|-------------|
+| l314.fsj (GAP/NP) | 1084 | 2244 | 1161 | 1800 rpm | 500 Hz |
+| l320.fsj (GAP/IF) | 1055 | 4460 | 3406 | 1800 rpm | 500 Hz |
+| l060.fsj (LOOCV/NP) | 2562 | 4415 | 1854 | 1600 rpm | 500 Hz |
+| l046.fsj (LOOCV/IF) | 1083 | 2095 | 1013 | 1400 rpm | 500 Hz |
+
+**Stage 5 status:** COMPLETE. Unchanged. Do not reopen.
+
+**Stage 6A status:** COMPLETE.
+- Parser handles all four documented `.fsj` samples.
+- Returns deterministic metadata and status.
+- Failures are explicit (FSJ_ERR_IO / FSJ_ERR_FORMAT / FSJ_ERR_WINDOW / FSJ_ERR_NOMEM).
+- Tests cover NP/IF and GAP/LOOCV paths.
+- No inference run.
+- Firmware builds clean.
+
+**Stage 6B:** BLOCKED on Q10 — need `src/weldmltrainer/feature_extraction.py` from the WeldML trainer repo to confirm which FSJ column is the primary signal and whether RotationSpeed comes from footer ROTATE or VEL8.
+
+**Open questions:**
+- Q10: OPEN — blocks Stage 6B.
+
+**Next action:**
+Resolve Q10 by reading `src/weldmltrainer/feature_extraction.py`. Once resolved, implement Stage 6B feature extraction.
+
+**Next prompt for a fresh session:**
+```
+Read docs/PROJECT_STATUS.md only.
+Stage 6A is complete. Stage 6B is blocked on Q10 (feature column mapping).
+Resolve Q10 by reading src/weldmltrainer/feature_extraction.py from the WeldML trainer repo,
+then implement Stage 6B feature extraction in components/weld_parser/ (add fsj_extract_features()).
+Do NOT start Stage 6C (inference). Do NOT inspect .env.
+```
 
 ---
 
@@ -122,7 +180,7 @@ Do NOT inspect .env.
 Stage 6 is split into four phases. Do not start a later phase until the earlier phase's blocker is resolved.
 
 ### Phase 6A — FSJ file discovery and parser contract
-**Status: READY TO IMPLEMENT (no open blockers)**
+**Status: COMPLETE (2026-06-20)**
 
 - Component: `components/weld_parser/`
 - Detects `.fsj` files on the SD card (newest by FAT mtime, same strategy as Stage 5 `find_newest("csv")`).
