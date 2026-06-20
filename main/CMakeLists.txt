@@ -1,4 +1,6 @@
-if(DEFINED ENV{BOARD})
+if(DEFINED BOARD)
+    set(BOARD_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/boards/${BOARD}")
+elseif(DEFINED ENV{BOARD})
     set(BOARD_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/boards/$ENV{BOARD}")
 else()
     set(BOARD_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/boards/esp32-s3")
@@ -10,4 +12,5 @@ idf_component_register(
     REQUIRES
         lcd_st7789
         usb_msc_sd
+        weld_processor
 )

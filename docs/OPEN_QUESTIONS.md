@@ -48,7 +48,16 @@ robot finishes writing and unmounts (or the MSC session ends)?
 - D: Robot presses a physical button (BOOT/Key1) after writing → triggers firmware read.
 - E: Robot writes a sentinel file (e.g., `DONE.txt`) → firmware polls for it while idle.
 
-**Pending until:** File completion signal decided (see Q6).
+**Resolved (2026-06-19 — Stage 5):** Option C — write-idle detection.
+`tud_msc_write10_complete_cb` (TinyUSB weak symbol, overridden in `weld_processor.c`)
+updates `s_last_write_ms` on every USB SCSI WRITE10 completion.  A FreeRTOS monitor
+task polls every 250 ms; after 5000 ms of no writes, it calls
+`tinyusb_msc_storage_mount(SD_MOUNT)` to take exclusive ESP ownership (sets
+`is_fat_mounted=true`, which causes `tud_msc_test_unit_ready_cb` to return false and
+`_msc_storage_write_sector` to reject host writes).  After processing, calls
+`tinyusb_msc_storage_unmount()` to return block access to the USB host.
+No USB re-enumeration.  No robot-side program changes required.
+Known limitation: detects SCSI block-write idle, not a true Kawasaki file-close event.
 
 ---
 
@@ -116,7 +125,10 @@ what signal does it provide to indicate that the file is complete and ready to p
 **Impact:** The answer determines Q3 (SD ownership transition strategy) and shapes
 the MSC callback and firmware state machine design.
 
-**Pending until:** Confirmed with robot/host software owner.
+**Resolved (2026-06-19 — Stage 5):** No robot-side signal required for Stage 5.
+USB MSC write-idle detection (5000 ms quiet period) is the completion heuristic.
+This decision was made explicitly: no Kawasaki pins, no GPIO handshaking, no DONE
+file, no rename marker, no robot program changes.  See Q3.
 
 ---
 
@@ -200,10 +212,10 @@ Required before: OTA expansion, SPIFFS above 4MB, or production WeldML firmware 
 |---|--------|----------|------|
 | Q1 | **Resolved** | Port SmrtUsbEsp code as new components into weldml-esp32 (Option A); no fork | 2026-06-19 |
 | Q2 | **Resolved** | Native ESP-IDF (`idf.py`); follows Q1; in use since Stage 1 | 2026-06-19 |
-| Q3 | Open | | |
+| Q3 | **Resolved** | Write-idle detection (5000 ms) + tinyusb_msc_storage_mount/unmount for exclusive ESP access | 2026-06-19 |
 | Q4 | **Resolved** | Pi workbench HTTP portal confirmed; GPIO wiring confirmed (gpio_boot=18, gpio_en=17); automated download mode works | 2026-06-19 |
 | Q5 | **Resolved** | Manual BOOT+RESET works; automated GPIO path also confirmed; sufficient for MVP dev phase | 2026-06-19 |
-| Q6 | Open | | |
+| Q6 | **Resolved** | No robot signal required; 5000 ms write-idle is the completion indicator (Stage 5 decision) | 2026-06-19 |
 | Q7 | **Resolved** | `esp_lcd` component + ST7789 panel driver; implemented in `components/lcd_st7789/` | 2026-06-19 |
 | Q8 | Open | | |
 | Q9 | **Resolved** | Preferred: `POST /api/flash` (Pi-side esptool); fallback: `idf.py -p rfc2217://192.168.1.43:4003 flash` | 2026-06-19 |

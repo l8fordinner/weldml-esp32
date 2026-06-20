@@ -7,14 +7,96 @@ Update this at the end of each working session and commit it with the session's 
 
 ## Current State (2026-06-19)
 
-**Phase:** Stage 4 COMPLETE. USB MSC + SD SPI verified on hardware.
-Next: Stage 5 — SCSI quiet-period detection / SD read path (blocked on Q3 + Q6).
+**Phase:** Stage 5 IN PROGRESS. Build and flash complete. LCD shows CYAN (WAITING state).
+TinyUSB not switching USB PHY from 303a:1001 → 303a:4003 — investigation needed.
 
-**Branch:** `main`
-**Last committed:** (this session — see below)
+**Branch:** `main`  
+**Last committed:** `e204d05` (Stage 4 complete)  
+**Working tree:** DIRTY — Stage 5 changes unstaged (see handoff below)
 
-**Board state:** SLOT3. Stage 4 firmware running. TinyUSB CDC+MSC active (303a:4003).
-LCD green. OpenOCD stopped (TinyUSB owns USB PHY; JTAG no longer available via USB).
+**Board state:** SLOT3. Stage 5 firmware flashed (2026-06-19). USB shows 303a:1001 (USB JTAG/serial);
+TinyUSB NOT enumerating as 303a:4003 despite LCD showing CYAN. Requires investigation.
+
+---
+
+## Session Handoff — 2026-06-19 (Stage 5 — flash done, TinyUSB enumeration blocked)
+
+**Goal:** Stage 5 — USB MSC write-idle handoff + placeholder JSON write.
+
+**Stage 5 decision (final, do not revisit):**
+- No Kawasaki pins, no GPIO handshaking, no DONE file, no rename marker, no robot-side changes
+- 5000 ms after last USB MSC SCSI WRITE10 = ready for ESP processing
+- Never allow FatFs and MSC to access SD simultaneously
+- After processing (success or failure), always return MSC control (call `tinyusb_msc_storage_unmount()`)
+- Known limitation: detects SCSI block-write idle, not a true Kawasaki file-close event
+
+**Files changed this session (unstaged):**
+- `CMakeLists.txt` — added `if(DEFINED BOARD)` before `elseif(DEFINED ENV{BOARD})` (CMake `-D` support)
+- `main/CMakeLists.txt` — same `-D BOARD=` fix; added `weld_processor` to REQUIRES
+- `main/main.c` — Stage 5: LCD state comments; calls `weld_processor_start()` after MSC init; halt loop on failure
+- `components/weld_processor/` (NEW):
+  - `weld_processor.h` — `weld_state_t` enum; `weld_processor_start()` declaration
+  - `weld_processor.c` — `tud_msc_write10_complete_cb` override; monitor task (250 ms poll, 5000 ms idle threshold); `process_sd()` (mount→find newest CSV→write JSON placeholder→unmount); LCD state machine
+  - `CMakeLists.txt` — REQUIRES: lcd_st7789, esp_tinyusb, esp_timer, freertos
+- `docs/OPEN_QUESTIONS.md` — Q3 resolved (write-idle + mount/unmount); Q6 resolved (no robot signal)
+
+**Build status:**
+- `idf.py -D BOARD=waveshare-esp32-s3-lcd-147 build` — **PASS** (14/14 incremental, 363 KB, zero errors, zero warnings)
+- **Build rule:** ALWAYS use `-D BOARD=waveshare-esp32-s3-lcd-147` on EVERY `idf.py` call (build AND flash). Omitting it poisons the CMake cache → `BOARD_LCD_MOSI_PIN undeclared` errors. Run `idf.py fullclean` to recover from a poisoned cache.
+
+**Flash status:**
+- **PASS** — flashed 2026-06-19 via SSH + Pi-side esptool; all 3 regions SHA-verified
+- Flash procedure used (manual — GPIO not wired, see workbench findings below):
+  1. Press **Key1+Key2** on board → device enters download mode (USB shows 303a:1001)
+  2. `scp build/bootloader/bootloader.bin build/partition_table/partition-table.bin build/weldml-esp32.bin casey@192.168.1.43:/tmp/`
+  3. `ssh casey@192.168.1.43 "python3 -m esptool --chip esp32s3 -p /dev/ttyACM0 -b 460800 --before=no-reset --after=hard-reset write-flash --flash-mode dio --flash-freq 80m --flash-size 16MB 0x0 /tmp/bootloader.bin 0x10000 /tmp/weldml-esp32.bin 0x8000 /tmp/partition-table.bin"`
+  4. Press **Key2 alone** (no Key1) → device boots into new firmware
+
+**Hardware verification status:**
+- [x] LCD shows CYAN after clean reset → `weld_processor_start()` called → `usb_msc_sd_init()` returned OK
+- [ ] **BLOCKED:** USB stays at `303a:1001` (USB JTAG/serial) — TinyUSB has NOT switched PHY to OTG
+  - Expected: USB re-enumerates as `303a:4003` (TinyUSB CDC+MSC)
+  - Actual: `303a:1001` persists; no serial output; dmesg shows no 303a:4003 event
+  - Stage 4 confirmed this transition working — Stage 5 regression
+
+**TinyUSB enumeration blocker — investigation notes:**
+- `tinyusb_driver_install()` returns `ESP_OK` (otherwise firmware would abort, LCD would be RED)
+- App reaches `weld_processor_start()` (sets CYAN) — execution past TinyUSB install confirmed
+- `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y` is intentional; Stage 4 used same config successfully
+- `tud_msc_write10_complete_cb` defined in `weld_processor.c` (weak symbol override) — likely not the cause
+- No serial output: console goes dark when TinyUSB should take over; if TinyUSB doesn't take over, no log
+- `dmesg` on Pi shows device 5 reset + disconnect + device 6 as 303a:1001, then NO further USB events
+- Possible causes: PSRAM/DMA memory allocation failure in TinyUSB task; task priority conflict; USB PHY state after repeated resets during this session; unknown ESP-IDF 5.3 regression
+
+**Next session instructions:**
+1. Read `docs/PROJECT_STATUS.md` only.
+2. Build is NOT needed (already built; if needed, always use `-D BOARD=waveshare-esp32-s3-lcd-147`).
+3. Diagnose TinyUSB enumeration failure. Approaches (in order):
+   a. Add `ESP_LOGI` before and after `tinyusb_driver_install()` in `usb_msc_sd.c`; rebuild + reflash; capture early boot log via `/api/serial/reset` BEFORE TinyUSB installs (timing matters)
+   b. Check if `esp_tinyusb` component has a known issue with simultaneous USB JTAG console on ESP32-S3 in IDF 5.3.2
+   c. Check `tinyusb_driver_install()` return path — confirm no silent error path exists
+4. To reflash: manual Key1+Key2 press, then SCP + SSH esptool as shown above.
+5. To boot (after flash): Key2 press alone (no Key1).
+6. **Do not start Stage 6. Do not implement ML inference. Do not inspect .env.**
+7. Stop on failure.
+
+---
+
+## Workbench Findings — Session 2026-06-19 (corrections to earlier entries)
+
+**GPIO wiring:** `gpio_boot=18` and `gpio_en=17` appear in `workbench.json` and portal config but are **NOT physically wired** to the Waveshare board. Confirmed by diagnostic: driving GPIO17 LOW via gpiod (`out lo` confirmed via `/sys/kernel/debug/gpio`) has zero effect on USB device state. Earlier entries claiming "automated download mode works" were premature — the portal API responded OK but wires are absent.
+
+**`POST /api/flash`:** Returns `{"error": "not found"}` — this endpoint does NOT exist in the installed portal version. RFC2217 is the only remote flash path, but it fails when TinyUSB CDC is active (CDC rejects baud rate SET_CONTROL).
+
+**`POST /api/serial/recover`:** Fails silently for SLOT3 — slot_key `"_fixed_SLOT3"` can't be parsed to a USB device path, so USB unbind step aborts. GPIO recovery never runs.
+
+**`workbench.local`:** Does not resolve in WSL. Always use IP `192.168.1.43` directly.
+
+**SSH:** `casey@192.168.1.43` — key auth, no password. Always available as fallback for direct Pi operations.
+
+**OpenOCD via SSH:** Available as `openocd-esp32 -s /usr/local/share/openocd-esp32/scripts`. Useful for CPU reset when DTR/RTS resets re-enter download mode. Interface config: `interface/esp_usb_jtag.cfg`, target: `target/esp32s3.cfg`.
+
+**RFC2217 flash (idf.py):** Fails with "Remote does not accept parameter change" when device runs TinyUSB CDC (`303a:4003`). Works when device is in download mode (`303a:1001`) using `--before=no-reset` via SSH esptool directly. The `?ign_set_control` URL parameter breaks RFC2217 negotiation entirely — do not use.
 
 ---
 
@@ -330,6 +412,10 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 | idf.py flash (Stage 4) | Waveshare | rfc2217://192.168.1.43:4003 | 2026-06-19 | PASS | All 3 binaries SHA verified; BOARD= must be set on every idf.py call |
 | USB TinyUSB enumeration | Waveshare | Pi USB | 2026-06-19 | PASS | 303a:1001 (JTAG) → 303a:4003 (TinyUSB CDC+MSC); OTG PHY switch confirmed |
 | LCD green (Stage 4) | Waveshare | — | 2026-06-19 | PASS | SD card init success; usb_msc_sd_init() returned OK |
+| idf.py build (Stage 5) | Waveshare (WSL build) | — | 2026-06-19 | PASS | 14/14 incremental, 363 KB, zero errors, zero warnings |
+| idf.py flash (Stage 5) | Waveshare | SSH esptool on Pi | 2026-06-19 | PASS | SHA-verified; --before=no-reset after manual Key1+Key2 |
+| LCD CYAN (Stage 5) | Waveshare | — | 2026-06-19 | PASS | weld_processor_start() called; WAITING state confirmed |
+| TinyUSB enumeration (Stage 5) | Waveshare | Pi USB | 2026-06-19 | **FAIL** | USB stays 303a:1001; expected 303a:4003; PHY not switching to OTG |
 
 ---
 
@@ -345,8 +431,8 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
 | esptool on Pi | **Confirmed** — v5.2.0; invoked via `POST /api/flash` (portal handles lifecycle) |
 | ESP-IDF on Pi | **Not installed** — build runs in WSL; Pi-side flash via portal API |
 | WSL→Pi flash path | **Confirmed** — `POST /api/flash` preferred; fallback `idf.py -p rfc2217://192.168.1.43:4003 flash` |
-| Pi GPIO wiring for Waveshare BOOT+RESET | **Confirmed** — gpio_boot=18 (→ Key1/GPIO0), gpio_en=17 (→ Key2/EN); automated download mode works |
-| Manual BOOT+RESET sequence | **Confirmed working** — hold Key1, tap Key2, release Key1; not required when using portal API |
+| Pi GPIO wiring for Waveshare BOOT+RESET | **NOT WIRED** — gpio_boot=18/gpio_en=17 in workbench.json but wires are physically absent. Confirmed: GPIO17 driven LOW has zero effect on USB device state. Manual button press required. |
+| Manual BOOT+RESET sequence | **Confirmed working** — hold Key1, tap Key2, release Key1 → 303a:1001 (download mode). Boot normally: Key2 alone (no Key1). |
 | OpenOCD on Pi (SLOT3) | **Confirmed** — auto-started; debug_chip=esp32s3, gdb_port=3335, telnet=4446 |
 | Hostname alias in WSL | **Not yet set** — add `192.168.1.43 workbench.local` to `/etc/hosts` before first flash |
 | UDP log capture on Waveshare | **Not yet verified** |
@@ -376,6 +462,7 @@ See `docs/OPEN_QUESTIONS.md` for full context on each question.
   - Content displays 180° rotated with MADCTL=0x00 (needs mirror(true,true) before Stage 4 UI work)
   - Fixed black semicircle at physical top-right = hardware/panel artifact (not software)
 - [x] **Stage 4 complete** — USB MSC + SD SPI verified on hardware (2026-06-19)
+- [ ] **Stage 5 in progress** — build+flash done (2026-06-19); TinyUSB enumeration blocked (see current handoff)
   - `components/usb_msc_sd/` — TinyUSB CDC+MSC + SD SPI init; SPI3_HOST, sdspi host, sdmmc_card_init
   - LCD green = SD card init success; USB re-enumerated 303a:1001→303a:4003 (OTG PHY switch)
   - MADCTL mirror(true,true) applied in lcd_st7789.c (orientation fix from Stage 3)
