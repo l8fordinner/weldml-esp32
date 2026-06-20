@@ -7,17 +7,86 @@ Update this at the end of each working session and commit it with the session's 
 
 ## Current State (2026-06-19)
 
-**Phase:** Stage 5 IN PROGRESS. Build and flash complete. LCD shows CYAN (WAITING state).
-TinyUSB not switching USB PHY from 303a:1001 → 303a:4003 — diagnosis done, boot log blocked.
+**Phase:** Stage 5 IN PROGRESS. Instrumented build done. Reflash BLOCKED — esptool cannot sync
+with ROM bootloader because Stage 5 runs at 303a:1001 (same PID as download mode), causing
+cdc_acm to reuse stale driver state after EN reset.
 
 **Branch:** `main`  
-**Last committed:** `d1c0587` (Stage 5 implementation — write-idle handoff, LCD states, handoff docs)  
-**Working tree:** CLEAN
+**Last committed:** `ff79648` (Stage 5 diagnosis — document TinyUSB PHY switch investigation)  
+**Working tree:** DIRTY — `components/usb_msc_sd/usb_msc_sd.c` modified (boot instrumentation added, not yet committed)
 
-**Board state:** SLOT3. Stage 5 firmware flashed (2026-06-19). USB stably at 303a:1001.
-Device is NOT crash-looping (single stable 303a:1001 enumeration, no repeated USB events in dmesg).
-TinyUSB PHY switch (`usb_new_phy()` → 303a:4003) never happens after Stage 5 boot.
-Stage 4 firmware WAS running as 303a:4003 before the Stage 5 flash (confirmed from dmesg at Pi boot).
+**Board state:** SLOT3. Stage 5 firmware still running (original d1c0587 flash). USB at 303a:1001.
+**Pi cdc_acm state:** UNBOUND (last SSH command left cdc_acm unbound). Run the rebind command below before any serial work.
+
+---
+
+## Session Handoff — 2026-06-19 (Stage 5 — instrumented build done, reflash blocked by esptool sync failure)
+
+**Goal:** Add boot instrumentation to usb_msc_sd.c, reflash, capture boot log.
+
+**Changes this session:**
+- `components/usb_msc_sd/usb_msc_sd.c` — replaced `ESP_ERROR_CHECK(tinyusb_driver_install(...))` with
+  explicit return-code capture + before/after log lines:
+  - `ESP_LOGI(TAG, "Calling tinyusb_driver_install...")`
+  - `esp_err_t tusb_ret = tinyusb_driver_install(&tusb_cfg);`
+  - `ESP_LOGI(TAG, "tinyusb_driver_install returned: %s (0x%x)", esp_err_to_name(tusb_ret), (unsigned)tusb_ret);`
+  - On failure: `ESP_LOGE(TAG, "TinyUSB driver install FAILED...")` + return error
+  - **NOT YET COMMITTED** — working tree is dirty
+
+**Build status:** PASS. Incremental build completed successfully after the edit.
+Binaries SCP'd to Pi at `/tmp/` (bootloader.bin, partition-table.bin, weldml-esp32.bin).
+
+**Reflash status: BLOCKED**
+
+Root cause: Stage 5 firmware is stuck at 303a:1001 (same USB PID as download mode). When the user
+presses Key1+Key2, the board resets and re-enumerates — still at 303a:1001. The Linux cdc_acm driver
+sees the same VID:PID reconnect and reuses cached endpoint/state from the running firmware session.
+esptool cannot sync with the ROM bootloader through this stale cdc_acm state.
+
+Evidence:
+- dmesg confirms USB reconnect events at t=3768s and t=5521s (button presses DO cause resets)
+- esptool fails with "No serial data received" after both attempts (sync timeout, not open failure)
+- Same esptool command worked for Stage 4→5 flash when firmware was at 303a:4003 (different PID → fresh cdc_acm state)
+- `usb://303a:1001` URI not supported by esptool v5.2.0 on Pi (pyserial lacks USB protocol handler)
+
+**Pi state on handoff:**
+- cdc_acm is UNBOUND (last action left it unbound)
+- Restore with: `ssh casey@192.168.1.43 "echo '1-1.4:1.0' | sudo tee /sys/bus/usb/drivers/cdc_acm/bind"`
+- Or wait for natural reconnect: key press will trigger udev autobind
+
+**Next session instructions:**
+1. Read `docs/PROJECT_STATUS.md` only.
+2. First, restore cdc_acm if needed (see Pi state above). Verify: `ssh casey@192.168.1.43 "ls /dev/ttyACM*"`
+3. Commit the working-tree change to `usb_msc_sd.c` (build already passes):
+   `git add components/usb_msc_sd/usb_msc_sd.c && git commit -m "Stage 5 diagnosis — add tinyusb_driver_install return-code logging"`
+4. Instrumented binaries are already at `/tmp/` on Pi. To reflash, **use the power-cycle download mode sequence**:
+   a. Unplug the USB cable from the board (or from the Pi USB port)
+   b. Press and hold Key1 (BOOT / GPIO0)
+   c. Plug USB back in while holding Key1
+   d. Release Key1 — device boots into download mode with fresh cdc_acm state
+   e. Immediately run: `ssh casey@192.168.1.43 "python3 -m esptool --chip esp32s3 -p /dev/ttyACM0 -b 460800 --before=no-reset --after=no-reset write-flash --flash-mode dio --flash-freq 80m --flash-size 16MB 0x0 /tmp/bootloader.bin 0x10000 /tmp/weldml-esp32.bin 0x8000 /tmp/partition-table.bin"`
+   OR alternatively: hold Key1 before plugging back in, then release Key1 after /dev/ttyACM0 appears.
+5. Start serial reader on Pi BEFORE booting:
+   `ssh casey@192.168.1.43 "python3 -c 'import serial,time; s=serial.Serial(\"/dev/ttyACM0\",115200,timeout=0.2); [print(s.read(2048).decode(errors=\"replace\"), end=\"\") for _ in range(100)]'" > /tmp/boot_log.txt &`
+6. **Press Key2 alone** (no Key1) to boot. Wait ~5s.
+7. Read log: `cat /tmp/boot_log.txt`
+8. Check dmesg for 303a:4003: `ssh casey@192.168.1.43 "dmesg | tail -10"`
+9. Interpret:
+   - "Calling tinyusb_driver_install..." appears → function IS reached
+   - "tinyusb_driver_install returned: ESP_OK" AND no 303a:4003 → PHY switch fails after install returns
+   - "tinyusb_driver_install returned: ESP_OK" AND 303a:4003 appears → enumeration working, check later stage
+   - No "Calling tinyusb_driver_install..." → something before it crashes; check earlier init steps
+   - Error return → fix that error
+10. If PHY switch confirmed failing (ESP_OK but no 303a:4003): check if `usb_new_phy()` requires
+    explicit USB Serial JTAG deinit (`usb_serial_jtag_ll_disable_intr_mask()` or `USB_SERIAL_JTAG.conf0` clear)
+    before calling. This is a known ESP-IDF 5.x issue on ESP32-S3.
+11. Do NOT start Stage 6. Do NOT inspect .env.
+
+**Why power-cycle download mode works vs EN-reset:**
+VDD_USB is supplied by the USB 5V rail. When USB is connected and EN reset fires, VDD_USB does NOT drop —
+the USB PHY may retain partial state from the Stage 5 firmware's USB PHY manipulation. Power cycling
+(unplugging USB) drops VDD_USB, fully resetting the USB PHY to ROM defaults. This should give esptool
+a clean ROM bootloader state to sync with.
 
 ---
 
