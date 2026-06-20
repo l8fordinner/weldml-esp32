@@ -84,7 +84,13 @@ esp_err_t usb_msc_sd_init(const usb_msc_sd_config_t *cfg)
         .external_phy             = false,
         .configuration_descriptor = NULL,
     };
-    ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
+    ESP_LOGI(TAG, "Calling tinyusb_driver_install...");
+    esp_err_t tusb_ret = tinyusb_driver_install(&tusb_cfg);
+    ESP_LOGI(TAG, "tinyusb_driver_install returned: %s (0x%x)", esp_err_to_name(tusb_ret), (unsigned)tusb_ret);
+    if (tusb_ret != ESP_OK) {
+        ESP_LOGE(TAG, "TinyUSB driver install FAILED — USB PHY will not switch to OTG");
+        return tusb_ret;
+    }
 
     ESP_LOGI(TAG, "USB MSC+CDC ready — SD mounted at %s", SD_MOUNT_POINT);
     return ESP_OK;
