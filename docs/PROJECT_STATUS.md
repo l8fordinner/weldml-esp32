@@ -50,13 +50,17 @@ sections below are historical continuity records, not active stop conditions.
    for the horizontal version, once for the rotated version.
 7. Hardware-verified: user confirmed the rotated READY label on the idle (cyan) screen
    renders correctly oriented (not mirrored/upside-down) and is legible at the larger
-   7x scale. The WRITING/PROCESS/PASS/FAIL labels use the identical code path
-   (`label_map[]` + `set_state()`, or the blink loop) but were not independently
-   re-observed this session — see `NOTES.md` for the exact caveat.
+   7x scale.
 8. Updated `NOTES.md` with the hardware test result (per the CLAUDE.md rule to log
    completed hardware tests there).
 9. Committed as `30591e6` and pushed to `origin/main`. `NOTES.md` update follows in a
    separate commit.
+10. Follow-up: triggered two more full write cycles with `l060.fsj` (LOOCV/NP) via Pi
+    mount/cp/sync/umount — user confirmed WRITING, PROCESS, and PASS labels all render
+    correctly. Then triggered a cycle with `l046.fsj` (LOOCV/IF) — user confirmed the
+    FAIL label (red blink) renders correctly. **All five status labels
+    (READY/WRITING/PROCESS/PASS/FAIL) are now independently hardware-verified.**
+    `NOTES.md` updated accordingly.
 
 ### Hardware state
 

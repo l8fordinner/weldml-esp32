@@ -260,13 +260,15 @@ scale that fits the 7-character labels WRITING/PROCESS within 320px).
 |------|--------|-------|
 | Build (`idf.py -D BOARD=waveshare-esp32-s3-lcd-147 build`) | PASS | Zero errors/warnings |
 | Flash via Pi SSH esptool (Key1+Key2 download mode, Key2 to boot) | PASS | SHA hash verified |
-| READY label on idle (cyan) screen | PASS — user confirmed | Rotated text renders correctly oriented (not mirrored/upside-down) and legible; user confirmed size/legibility acceptable |
+| READY label on idle (cyan) screen | PASS — user confirmed | Rotated text renders correctly oriented (not mirrored/upside-down) and legible |
+| WRITING label (white), triggered by copying `l060.fsj` to SD via Pi mount/cp/sync/umount | PASS — user confirmed | Two full cycles run; label visible during the write-idle window |
+| PROCESS label (blue), same trigger | PASS — user confirmed | Visible during `process_fsj_file()` before the result blink |
+| PASS label (green blink), same trigger | PASS — user confirmed | `l060.fsj` is the LOOCV/NP fixture — expected PASS |
 
-Only the WRITING→PROCESS→PASS/FAIL portion of the cycle was not re-verified visually
-this session (READY/idle state only) — the same `lcd_st7789_draw_text_centered()` call
-path is used for all five states via the `label_map[]`/`set_state()` mechanism and the
-blink loop in `process_sd()`, so it is expected but not independently observed for the
-other four labels.
+| FAIL label (red blink), triggered by copying `l046.fsj` (LOOCV/IF fixture) to SD | PASS — user confirmed | Correctly predicted IF; red blink with FAIL text confirmed |
+
+All five status labels (READY/WRITING/PROCESS/PASS/FAIL) are now independently
+hardware-verified.
 
 ---
 
