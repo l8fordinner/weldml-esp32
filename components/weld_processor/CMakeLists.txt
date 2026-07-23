@@ -6,4 +6,6 @@ idf_component_register(
         esp_tinyusb
         esp_timer
         freertos
+        weld_inference
+        weld_parser
 )

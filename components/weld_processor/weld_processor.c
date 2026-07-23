@@ -4,6 +4,7 @@
 #include <strings.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -14,6 +15,8 @@
 #include "esp_timer.h"
 #include "tusb_msc_storage.h"
 #include "lcd_st7789.h"
+#include "weld_inference.h"
+#include "weld_parser.h"
 
 static const char *TAG = "weld_proc";
 
@@ -137,7 +140,10 @@ static bool find_any_file(char *out_path, size_t path_len, time_t *out_mtime)
     return found;
 }
 
-static bool write_placeholder(const char *src_path, time_t src_mtime)
+static bool write_result_json(const char *src_path, time_t src_mtime,
+                              const fsj_result_t *parsed,
+                              const fsj_features_t *features,
+                              const weld_inference_result_t *result)
 {
     FILE *f = fopen(RESULT_PATH, "w");
     if (!f) {
@@ -157,9 +163,45 @@ static bool write_placeholder(const char *src_path, time_t src_mtime)
     name = name ? name + 1 : src_path;
 
     int wr = fprintf(f,
-            "{\"source\":\"%s\",\"mtime\":\"%s\","
-            "\"stage\":5,\"status\":\"pending_parse\",\"result\":null}\n",
-            name, mtime_str);
+            "{"
+            "\"source\":\"%s\","
+            "\"mtime\":\"%s\","
+            "\"stage\":6,"
+            "\"status\":\"ok\","
+            "\"parser_version\":\"%s\","
+            "\"model_id\":\"%s\","
+            "\"result\":{"
+            "\"predicted_class\":%d,"
+            "\"label\":\"%s\","
+            "\"probability_class1\":%.6f"
+            "},"
+            "\"parse\":{"
+            "\"timestamp\":\"%s\","
+            "\"rows\":%" PRIu32 ","
+            "\"window_start_row\":%" PRIu32 ","
+            "\"window_end_row\":%" PRIu32 ","
+            "\"window_count\":%" PRIu32 ","
+            "\"sample_rate_hz\":%.3f"
+            "},"
+            "\"features\":{"
+            "\"MinPositionStage3\":%.9g,"
+            "\"FFT_FrequencyBandwidth\":%.9g"
+            "}"
+            "}\n",
+            name, mtime_str,
+            FSJ_PARSER_VERSION,
+            WELD_INFERENCE_MODEL_ID,
+            result->predicted_class,
+            result->label,
+            (double)result->probability_class1,
+            parsed->meta.timestamp,
+            parsed->total_rows,
+            parsed->window_start_row,
+            parsed->window_end_row,
+            parsed->window_count,
+            (double)parsed->sample_rate_hz,
+            (double)features->values[FSJ_FEATURE_MIN_POSITION_STAGE3],
+            (double)features->values[FSJ_FEATURE_FFT_FREQUENCY_BANDWIDTH]);
     bool ok = (wr > 0) && (fflush(f) == 0);
     if (!ok) {
         ESP_LOGE(TAG, "write to %s failed errno=%d", RESULT_PATH, errno);
@@ -169,8 +211,84 @@ static bool write_placeholder(const char *src_path, time_t src_mtime)
         ok = false;
     }
     if (ok) {
-        ESP_LOGI(TAG, "Placeholder: %s -> %s", src_path, RESULT_PATH);
+        ESP_LOGI(TAG, "Inference: %s -> %s (%s %.3f)",
+                 src_path, RESULT_PATH, result->label,
+                 (double)result->probability_class1);
     }
+    return ok;
+}
+
+static bool write_error_json(const char *src_path, time_t src_mtime,
+                             const char *status, const char *detail)
+{
+    FILE *f = fopen(RESULT_PATH, "w");
+    if (!f) {
+        ESP_LOGE(TAG, "fopen(%s) failed errno=%d", RESULT_PATH, errno);
+        return false;
+    }
+
+    char mtime_str[32] = "unknown";
+    struct tm tm_info;
+    if (src_mtime != 0 && gmtime_r(&src_mtime, &tm_info)) {
+        strftime(mtime_str, sizeof(mtime_str), "%Y-%m-%dT%H:%M:%SZ", &tm_info);
+    }
+
+    const char *name = NULL;
+    if (src_path) {
+        name = strrchr(src_path, '/');
+        name = name ? name + 1 : src_path;
+    }
+
+    int wr;
+    if (name) {
+        wr = fprintf(f,
+                "{\"source\":\"%s\",\"mtime\":\"%s\","
+                "\"stage\":6,\"status\":\"%s\",\"error\":\"%s\",\"result\":null}\n",
+                name, mtime_str, status, detail);
+    } else {
+        wr = fprintf(f,
+                "{\"source\":null,\"mtime\":null,"
+                "\"stage\":6,\"status\":\"%s\",\"error\":\"%s\",\"result\":null}\n",
+                status, detail);
+    }
+    bool ok = (wr > 0) && (fflush(f) == 0);
+    if (!ok) {
+        ESP_LOGE(TAG, "write to %s failed errno=%d", RESULT_PATH, errno);
+    }
+    if (fclose(f) != 0) {
+        ESP_LOGE(TAG, "fclose(%s) failed errno=%d", RESULT_PATH, errno);
+        ok = false;
+    }
+    return ok;
+}
+
+static bool process_fsj_file(const char *src_path, time_t src_mtime)
+{
+    fsj_result_t parsed;
+    fsj_status_t st = fsj_parse_file(src_path, &parsed);
+    if (st != FSJ_OK) {
+        ESP_LOGE(TAG, "Parse failed for %s: %s (%s)",
+                 src_path, fsj_status_str(st), parsed.error_msg);
+        return write_error_json(src_path, src_mtime, fsj_status_str(st), parsed.error_msg);
+    }
+
+    fsj_features_t features;
+    st = fsj_extract_features(&parsed, &features);
+    if (st != FSJ_OK) {
+        ESP_LOGE(TAG, "Feature extraction failed for %s: %s", src_path, fsj_status_str(st));
+        fsj_result_free(&parsed);
+        return write_error_json(src_path, src_mtime, fsj_status_str(st), "feature extraction failed");
+    }
+
+    weld_inference_result_t result;
+    if (!weld_inference_predict(&features, &result)) {
+        ESP_LOGE(TAG, "Inference failed for %s", src_path);
+        fsj_result_free(&parsed);
+        return write_error_json(src_path, src_mtime, "inference_failed", "tree inference failed");
+    }
+
+    bool ok = write_result_json(src_path, src_mtime, &parsed, &features, &result);
+    fsj_result_free(&parsed);
     return ok;
 }
 
@@ -193,7 +311,7 @@ static void process_sd(void)
 
     char src_path[320] = {0};
     time_t src_mtime   = 0;
-    bool found = find_newest("csv", src_path, sizeof(src_path), &src_mtime);
+    bool found = find_newest("fsj", src_path, sizeof(src_path), &src_mtime);
     if (!found) {
         found = find_any_file(src_path, sizeof(src_path), &src_mtime);
     }
@@ -201,26 +319,10 @@ static void process_sd(void)
     bool write_ok;
     if (found) {
         ESP_LOGI(TAG, "Newest file: %s (mtime=%lld)", src_path, (long long)src_mtime);
-        write_ok = write_placeholder(src_path, src_mtime);
+        write_ok = process_fsj_file(src_path, src_mtime);
     } else {
-        ESP_LOGW(TAG, "No files on SD card — writing empty placeholder");
-        FILE *f = fopen(RESULT_PATH, "w");
-        if (!f) {
-            ESP_LOGE(TAG, "fopen(%s) failed errno=%d", RESULT_PATH, errno);
-            write_ok = false;
-        } else {
-            int wr = fprintf(f, "{\"source\":null,\"mtime\":null,"
-                               "\"stage\":5,\"status\":\"no_files\",\"result\":null}\n");
-            bool ok = (wr > 0) && (fflush(f) == 0);
-            if (!ok) {
-                ESP_LOGE(TAG, "write to %s failed errno=%d", RESULT_PATH, errno);
-            }
-            if (fclose(f) != 0) {
-                ESP_LOGE(TAG, "fclose(%s) failed errno=%d", RESULT_PATH, errno);
-                ok = false;
-            }
-            write_ok = ok;
-        }
+        ESP_LOGW(TAG, "No files on SD card");
+        write_ok = write_error_json(NULL, 0, "no_files", "no weld file found");
     }
 
     /* Always unmount: returns MSC control to host on both success and failure. */
