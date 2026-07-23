@@ -5,6 +5,69 @@ Update this at the end of each working session and commit it with the session's 
 
 ---
 
+## Session Handoff — 2026-07-23 (model export sync committed; Stage 6B next)
+
+**Reason for handoff:** Context reached the project yellow-threshold range reported by the user
+(~132K tokens used). Stop implementation work and preserve the current state before continuing.
+
+**Branch:** `main`
+**Last commit:** `ccee731` — `model_exports: rescope ESP32 inference to single coarse tree`
+**Working tree:** DIRTY only because `test_data/` is untracked fixture data. No tracked changes
+remain after the handoff commit below.
+
+**What was done this session:**
+
+1. Read `docs/PROJECT_STATUS.md` and `docs/OPEN_QUESTIONS.md` before touching code.
+2. Reviewed the pending trainer-export sync diff in this firmware repo.
+3. Confirmed the diff rescopes Stage 6C from dual-model cascade to a single Coarse Tree model.
+4. Confirmed Model A / Subspace KNN artifacts are removed from `model_exports/esp32_port/`.
+5. Confirmed `golden_vectors.json` has 38 `original38` vectors and separates deployed-artifact
+   predictions from LOOCV held-out predictions.
+6. Fixed two stale references before committing:
+   - `docs/MVP_REQUIREMENTS.md` data flow now says `Run Coarse Tree model`.
+   - `model_exports/esp32_port/REPRODUCTION_COMMANDS.md` no longer says deleted Model A artifacts
+     still exist in this firmware repo.
+7. Normalized changed text export files to LF so `git diff --check` passes.
+8. Committed the model export sync as `ccee731`.
+
+**Validation performed:**
+
+- `git diff --check` — PASS before commit.
+- `jq empty` on changed JSON metadata/golden-vector files — PASS.
+- `golden_vectors.json` vector count — 38.
+- `golden_vectors.csv` line count — 39 (header + 38 rows).
+
+**Current project state:**
+
+- Stage 5: COMPLETE. Do not reopen.
+- Stage 6A parser: COMPLETE.
+- Q10 feature formulas: FULLY RESOLVED. Stage 6B is UNBLOCKED.
+- Stage 6B feature extraction: NOT IMPLEMENTED.
+- Stage 6C inference: BLOCKED on Stage 6B and RESCOPED to single-model only.
+- Do not build any Model A, KNN-distance, ensemble voting, or cascade infrastructure.
+- There is no automated sync from `J:\Repos\WeldMLTrainer-PyTorch`; `model_exports/esp32_port/`
+  is a manual point-in-time copy.
+
+**Exact next-session prompt:**
+
+```
+Read docs/PROJECT_STATUS.md and docs/OPEN_QUESTIONS.md first.
+
+The model export sync was committed as ccee731. Stage 6C is now single-model only:
+Coarse Tree from model_exports/esp32_port/model_b_loocv947_coarse_tree/.
+Do not implement Model A, KNN, ensemble voting, or any cascade/rescue policy.
+
+Stage 6B is the next implementation task and is unblocked by Q10:
+- Implement feature extraction in components/weld_parser/ for exactly the 22-feature schema.
+- Use raw LOADCELL window values for time-domain/FFT/CWT.
+- Use POS7/TIME/STAGE/footer ROTATE for the position and rotation features per Q10.
+- Add focused host-side tests for feature formulas.
+- Do NOT start Stage 6C inference until Stage 6B is implemented and verified.
+- Do NOT inspect .env.
+```
+
+---
+
 ## Current State (2026-06-20)
 
 **Phase:** Stage 6A COMPLETE. **Q10 FULLY RESOLVED.** All 22 feature formulas confirmed from `parse_and_clean.py`. Stage 6B is UNBLOCKED.
