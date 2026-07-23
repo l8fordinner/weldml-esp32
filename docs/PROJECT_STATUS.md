@@ -5,10 +5,94 @@ Update this at the end of each working session and commit it with the session's 
 
 ---
 
+## Active Continuity Policy — 2026-07-23
+
+Context, five-hour, weekly, and account-budget telemetry are informational only.
+They must not trigger a handoff, stop implementation work, block tool use, or force
+a `docs/PROJECT_STATUS.md` commit.
+
+Write a handoff/update only when the user explicitly asks for one or when work is
+genuinely complete and the project state changed. The older `Session Handoff`
+sections below are historical continuity records, not active stop conditions.
+
+---
+
+## Session Handoff — 2026-07-23 (Stage 6C next; context gate superseded)
+
+**Historical note:** This context-gate handoff is superseded by the current
+continuity policy. Context and account-budget telemetry must not stop
+implementation work.
+
+**Branch:** `main` (not rechecked during the historical handoff because shell tools were refused)
+**Last known commit:** `0e33c8f` — `weld_parser: implement Stage 6B feature extraction`
+**Working tree:** Known dirty before handoff attempt: `AGENTS.md` modified by user/context
+setup and untracked `test_data/`. No Stage 6C files were successfully written; the attempted
+new `components/weld_inference/` patch failed before creating files because the sandbox was
+read-only and the component directory did not exist.
+
+**What was done this session:**
+
+1. Read `docs/PROJECT_STATUS.md` and `docs/OPEN_QUESTIONS.md` before touching code.
+2. Confirmed Stage 6B is complete and Stage 6C is next.
+3. Inspected the Stage 6B parser/feature API in `components/weld_parser/`.
+4. Inspected the single-model Coarse Tree export:
+   `model_exports/esp32_port/model_b_loocv947_coarse_tree/portable_model.json`.
+5. Confirmed exported inference scope:
+   - model id: `model_b_loocv947_coarse_tree`
+   - classes: `0=NP`, `1=IF`
+   - tree has 5 nodes and max depth 2
+   - split 0: `MinPositionStage3 <= 2.1850000619888306` -> `NP`
+   - split 2: `FFT_FrequencyBandwidth <= 0.24015963822603226` -> `NP`, else `IF`
+6. Inspected `golden_vectors.csv/json`; host tests should compare ESP32 tree output to
+   `model_predicted_class` and `model_probability_class1` for all 38 original vectors.
+7. Prepared but did not successfully apply a patch to:
+   - add `components/weld_inference/`
+   - add `tests/host/test_weld_inference.c`
+   - update `tests/host/CMakeLists.txt`
+   - integrate parse -> feature extraction -> inference result JSON in `weld_processor.c`
+
+**Validation performed:** None after startup. No code changes landed.
+
+**Exact next action:**
+
+Implement Stage 6C inference using only the single Coarse Tree model from
+`model_exports/esp32_port/model_b_loocv947_coarse_tree/`. Start by creating
+`components/weld_inference/` with a tiny static tree table or equivalent nested-if
+implementation. Add host-side tests that feed `golden_vectors.csv` feature rows directly
+into the tree and verify `model_predicted_class` plus `model_probability_class1`.
+Then integrate the inference path into `weld_processor.c` result writing.
+
+**Exact next-session prompt:**
+
+```
+Read docs/PROJECT_STATUS.md and docs/OPEN_QUESTIONS.md first.
+
+Stage 6B feature extraction is complete and committed as 0e33c8f.
+Stage 6C has not landed. Implement ESP32-side inference using only:
+model_exports/esp32_port/model_b_loocv947_coarse_tree/
+
+Use fsj_extract_features() output as the fixed 22-feature input vector.
+Port only the Coarse Tree:
+- if MinPositionStage3 <= 2.1850000619888306 -> NP, probability_if=0.0
+- else if FFT_FrequencyBandwidth <= 0.24015963822603226 -> NP, probability_if=0.0
+- else -> IF, probability_if=1.0
+
+Add host-side tests that feed all 38 rows from golden_vectors.csv directly into the
+tree and verify model_predicted_class/model_probability_class1. Then update
+weld_processor.c to parse the newest FSJ file, extract features, run inference, and
+write a Stage 6 result JSON.
+
+Do not implement Model A, KNN, ensemble voting, cascade, or rescue policy.
+Do not inspect .env.
+```
+
+---
+
 ## Session Handoff — 2026-07-23 (Stage 6B complete; Stage 6C next)
 
-**Reason for handoff:** User reported context at `197K/258K`, which is past the project
-handoff threshold. Stop implementation work and preserve exact state before continuing.
+**Historical note:** This context-threshold handoff is superseded by the current
+continuity policy. Context and account-budget telemetry must not stop
+implementation work.
 
 **Branch:** `main`
 **Last commit:** `0e33c8f` — `weld_parser: implement Stage 6B feature extraction`
@@ -72,8 +156,9 @@ Do not inspect .env.
 
 ## Session Handoff — 2026-07-23 (model export sync committed; Stage 6B next)
 
-**Reason for handoff:** Context reached the project yellow-threshold range reported by the user
-(~132K tokens used). Stop implementation work and preserve the current state before continuing.
+**Historical note:** This context-threshold handoff is superseded by the current
+continuity policy. Context and account-budget telemetry must not stop
+implementation work.
 
 **Branch:** `main`
 **Last commit:** `ccee731` — `model_exports: rescope ESP32 inference to single coarse tree`

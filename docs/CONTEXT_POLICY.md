@@ -1,6 +1,6 @@
-# Context Policy
+# Continuity Policy
 
-Rules for managing context, token budget, and session handoff in Claude Code.
+Rules for managing continuity across long sessions.
 
 ---
 
@@ -33,30 +33,22 @@ Do not rely on memory of prior session state. Always read current file state.
 
 ---
 
-## Token Budget and Context Thresholds
+## Token Budget and Context Handling
 
-### Percentage thresholds
+Context or account-budget telemetry is informational only. Do not stop
+implementation work, refuse tool use, write a handoff block, or commit
+`docs/PROJECT_STATUS.md` solely because context, five-hour, or weekly telemetry
+crosses a threshold.
 
-**At ~70% context used:**
-- Do not start new implementation tasks.
-- Update `docs/PROJECT_STATUS.md` with current state if not already current.
-- Finish only work already in progress; do not open new files or new areas.
+If context pressure is high, keep working with concise status updates and compact
+tool output. Let the platform's normal context compaction handle long-running
+sessions.
 
-**At ~80% context used:**
-- Stop the current task at the next safe boundary (never mid-edit, never mid-build).
-- Write a handoff note (see below) in the conversation.
-- Commit any completed work that passes `idf.py build`.
-- Report to the user: done, in progress, next action.
+### End-of-session notes
 
-**At ~85% context used:**
-- State capture only. No new coding, no new planning.
-- Output the handoff note, update PROJECT_STATUS.md, commit if needed, then stop.
-
-### End-of-session requirement
-
-Every major working session must end with `docs/PROJECT_STATUS.md` updated and committed.
-Decisions made in chat are not recorded until they appear in a committed doc.
-Never rely on conversation memory alone for decisions — write them to the file before closing.
+When work is genuinely complete, update `docs/PROJECT_STATUS.md` if the project
+state changed. Decisions made in chat are not recorded until they appear in a
+committed doc.
 
 ### Do not let context fill silently
 
@@ -68,8 +60,11 @@ findings rather than pasting raw tool output.
 
 ## Handoff Protocol
 
-When ending a long session, leaving a task incomplete, or handing off between sessions,
-write a brief handoff note in the conversation AND update `docs/PROJECT_STATUS.md`. Include:
+Write a handoff note only when the user explicitly asks for one or when work is
+genuinely complete and a project-status update is appropriate. Do not create a
+handoff because of context or account-budget telemetry.
+
+When a handoff is explicitly requested, include:
 
 - **Goal:** what this session was trying to accomplish.
 - **Done:** what was completed and confirmed (build pass, hardware test, doc written).

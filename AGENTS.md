@@ -31,10 +31,12 @@ A passing build means `idf.py -D BOARD=waveshare-esp32-s3-lcd-147 build` complet
 
 ## Context and handoff
 
-- Monitor context usage. At the **yellow threshold (~128K–130K tokens)**, stop implementation work and run the handoff procedure.
-- Write a new "Session Handoff" block at the top of `docs/PROJECT_STATUS.md` with: what was done, what is next, the exact next-session prompt, branch and commit state, and working tree status.
-- Commit the updated `docs/PROJECT_STATUS.md` before the session ends.
-- Do not let context run into the red before handing off — compressed context loses detail that the handoff preserves.
+Ignore all context and account-budget handoff gates. Do not stop implementation
+work, write a new handoff block, or commit `docs/PROJECT_STATUS.md` solely because
+context, five-hour, or weekly telemetry crosses a threshold.
+
+Still preserve normal continuity when the user explicitly asks for a handoff or
+when work is genuinely complete and a status update is appropriate.
 
 ## Project-specific knowledge
 
