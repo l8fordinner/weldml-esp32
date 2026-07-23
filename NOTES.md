@@ -223,6 +223,28 @@ The speedup was lower than the theoretical ~77× ops reduction because:
 
 ---
 
+## MVP Closure — LCD Writing-State Color Fix (2026-07-23)
+
+**Change:** `WELD_STATE_WRITING` color changed from `LCD_COLOR_YELLOW` (0xFFE0) to
+`LCD_COLOR_WHITE` (0xFFFF) in `components/weld_processor/weld_processor.c` for stronger
+contrast against the `LCD_COLOR_GREEN` (0x07E0) result blink. WS2812B RGB LED (GPIO38)
+formally descoped for MVP — wired but never driven by firmware; see `MVP_REQUIREMENTS.md`.
+
+**Hardware test (Waveshare ESP32-S3-LCD-1.47, Pi workbench SLOT3, firmware `c2c1f3c`):**
+
+| Test | Result | Notes |
+|------|--------|-------|
+| Build (`idf.py -D BOARD=waveshare-esp32-s3-lcd-147 build`) | PASS | Zero errors/warnings |
+| Flash via Pi SSH esptool (Key1+Key2 download mode, Key2 to boot) | PASS | SHA hash verified |
+| Full color-state cycle, triggered twice via `l060.fsj` copy to SD | PASS | CYAN (idle) → WHITE (writing) → BLUE (processing) → GREEN blink (NP result) → CYAN |
+| White/green contrast vs. prior yellow/green | PASS — user confirmed visually | "works" |
+
+MVP declared complete by user after this test. Remaining `MVP_REQUIREMENTS.md` out-of-scope
+items (OTA, MQTT, WiFi, web server, BLE, multi-file batch, WS2812B LED, etc.) are
+intentionally unimplemented — not gaps.
+
+---
+
 ## Deferred to Product Fork
 
 These items are not part of the base template and do not need to be tested here:
