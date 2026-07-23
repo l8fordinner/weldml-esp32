@@ -20,7 +20,7 @@ Read & parse
 Compute 22 WeldML features
     │
     ▼
-Run Model A + Model B (both, independently)
+Run Coarse Tree model
     │
     ▼
 Decision rule → BAD or GOOD
@@ -51,41 +51,65 @@ or re-implemented in C for the ESP32-S3. Source reference: existing WeldML model
 
 ---
 
-## Inference Models
+## Inference Model
 
-Two models run independently on every weld file:
+**Single-model proof-of-concept (rescoped 2026-07-14 — supersedes the dual-model plan below).**
 
-| Model | Name | Training accuracy |
-|-------|------|------------------|
-| Model A | Subspace KNN | 100% (controlled-gap historical dataset) |
-| Model B | Coarse Tree | 94.7368% LOOCV |
+One model runs on every weld file:
 
-Both models must be embedded in firmware (coefficients, tree structure, or lookup tables
-as appropriate). Neither requires network access.
+| Model | Name | Accuracy |
+|-------|------|----------|
+| Coarse Tree | `sklearn.tree.DecisionTreeClassifier(max_depth=2)`, run `20260428_083434Z`, `sposm_ge_zero` policy | 94.7% LOOCV (36/38, honest held-out estimate) / 100% resubstitution on the deployed (refit-on-all-38) artifact — these are two distinct figures, do not conflate; see `model_exports/esp32_port/MODEL_SELECTION.md`. |
+
+Model must be embedded in firmware (tree node table — 5 nodes, max depth 2). No network access
+required. No KNN, no ensemble voting, no per-estimator feature-subset storage — the previously
+planned Model A (Subspace KNN, 200-estimator BaggingClassifier) is **out of scope** for this POC;
+see rationale below. This significantly simplifies the embedded implementation versus the
+dual-model plan: no RAM-bounded distance streaming, no training-vector storage in flash.
+
+**Known, accepted limitation:** this model is validated against its own training distribution
+(the 38-sample `original38` set) only. It is **not** validated against, and is not claimed to
+generalize to, the controlled-gap distribution — no model evaluated in the trainer repo achieves
+both LOOCV ≥ 80% and GAP ≥ 80% simultaneously (systematic inversion; the same 94.7%-LOOCV tree
+family predicts NP for essentially every gap-set IF defect). This is a proof-of-concept
+demonstrating a real, deployable classifier at its documented accuracy on its target distribution,
+not a claim of generalization beyond it. Full rationale:
+`WeldMLTrainer-PyTorch/docs/reports/MODEL_SELECTION_DECISION_CURRENT.md`.
 
 ---
 
 ## Decision Rule
 
-**Dual-model rescue policy (confirmed 2026-06-20 — Stage 6 planning):**
+**Single-model policy (rescoped 2026-07-14):**
 
+```
+PASS if Coarse Tree predicts NP
+FAIL if Coarse Tree predicts IF
+```
+
+No second model, no rescue step, no AND/OR cascade.
+
+---
+
+## Superseded — Prior Dual-Model Plan (historical, do not implement)
+
+The dual-model rescue policy below was the Stage 6 decision rule through 2026-07-13. It is
+retained here only for history; do not implement it. It was replaced because the trainer-side
+project confirmed no combination of the two models (OR-cascade, AND-cascade, either evaluation
+order) achieves both good LOOCV and good GAP performance — the cascade was evaluated and
+rejected on its own terms (`WeldMLTrainer-PyTorch/docs/reports/OLD_POLICY_CASCADE_EVAL.md`),
+not just simplified away for embedded convenience.
+
+Old policy (do not implement):
 ```
 PASS if Model B predicts NP  OR  Model A predicts NP
 FAIL if Model B predicts IF  AND Model A predicts IF
 ```
+Model B = Coarse Tree (LOOCV-validated, primary). Model A = Subspace KNN (gap-dataset-validated,
+secondary/rescue, only invoked if Model B predicted IF).
 
-Model B (Coarse Tree, LOOCV-validated) is the primary model.  
-Model A (Subspace KNN, gap-dataset-validated) is the secondary/rescue model.
-
-Evaluation order:
-1. Run Model B. If Model B predicts NP → PASS immediately.
-2. If Model B predicts IF → run Model A.
-3. If Model A predicts NP → PASS (Model A rescues).
-4. If Model A also predicts IF → FAIL (both agree).
-
-Equivalent: `PASS = (B == NP) OR (A == NP)` / `FAIL = (B == IF) AND (A == IF)`
-
-**Note:** An earlier draft of this document stated `GOOD if A==NP AND B==NP`, which is the opposite (more conservative, both-must-agree) policy. That policy is incorrect. The dual-model rescue policy above is the authoritative Stage 6 decision rule.
+**Note:** An even earlier draft of this document stated `GOOD if A==NP AND B==NP` (the opposite,
+more-conservative both-must-agree policy) — also not implemented, also superseded.
 
 ---
 

@@ -428,35 +428,40 @@ Stage 6 is split into four phases. Do not start a later phase until the earlier 
 - dtype: float32 (confirmed in FEATURE_SCHEMA and PREPROCESSING.json).
 
 ### Phase 6C — Model inference and PASS/FAIL decision
-**Status: BLOCKED on 6B**
+**Status: BLOCKED on 6B (feature extraction implementation, tracked separately). Rescoped to single-model 2026-07-14 — see below.**
 
-**Model B (primary — Coarse Tree, `model_b_loocv947_coarse_tree/`):**
+**Rescope note (2026-07-14):** The trainer-side project confirmed no combination of Model A and
+Model B (either cascade order, OR or AND) achieves both good LOOCV and good GAP performance —
+the dual-model rescue policy was evaluated on its own terms and rejected
+(`WeldMLTrainer-PyTorch/docs/reports/OLD_POLICY_CASCADE_EVAL.md`), not just dropped for embedded
+convenience. Stage 6C is now single-model. Model A (Subspace KNN, 200-estimator BaggingClassifier)
+is out of scope: no on-device KNN, no per-estimator feature-subset storage, no RAM-bounded
+distance streaming. `model_exports/esp32_port/` no longer contains Model A's artifacts.
+
+**Model (Coarse Tree, `model_b_loocv947_coarse_tree/`):**
 - 5 nodes, max depth 2; implemented as nested if/else or static node table.
 - Node 0: `features[16] (MinPositionStage3) <= 2.1850` → left (leaf 1, class 0 = NP = PASS)
 - Node 2: `features[9] (FFT_FrequencyBandwidth) <= 0.2402` → left (leaf 3, class 0 = NP = PASS); else right (leaf 4, class 1 = IF = FAIL)
 - Routing: at a split node, `features[idx] <= threshold` goes left; else right.
 - Class mapping: 0 = NP = PASS; 1 = IF = FAIL.
 - No scaler; thresholds are in raw feature units.
+- Accuracy: 94.7% LOOCV (36/38, honest held-out estimate) vs. 100% resubstitution on this exact
+  deployed artifact (refit on all 38 training samples) — two distinct, non-conflicting figures;
+  see `model_exports/esp32_port/MODEL_SELECTION.md`.
 
-**Model A (secondary/rescue — Subspace KNN, `model_a_gap100_subspace_knn/`):**
-- 200 BaggingClassifier estimators; each uses 14 of 22 features (subset per estimator).
-- Each estimator: nearest-neighbor vote over 38 stored training vectors.
-- Voting: average per-estimator class probabilities; class with highest average wins.
-- Implementation: store feature subset indices, training labels, and training vectors in flash. Stream Euclidean distances to keep RAM bounded. See `portable_model.json`.
-- Only invoked if Model B predicts IF (class 1). Do not invoke Model A when Model B predicts NP.
-
-**Dual-model rescue decision policy:**
+**Single-model decision policy:**
 ```
-if model_b_class == 0 (NP):
-    result = PASS   # Model B says good; accept immediately
+if model_class == 0 (NP):
+    result = PASS
 else:
-    run Model A
-    if model_a_class == 0 (NP):
-        result = PASS   # Model A rescues
-    else:
-        result = FAIL   # Both predict IF
+    result = FAIL
 ```
-Equivalent: `PASS = (B==NP) OR (A==NP)` / `FAIL = (B==IF) AND (A==IF)`
+No second model, no rescue step, no cascade.
+
+**Known, accepted limitation:** this model is not validated against the controlled-gap
+distribution and must not be marketed or treated as generalizing beyond the original38 training
+distribution it was built and evaluated on. This is a documented proof-of-concept scope, not an
+oversight — see `WeldMLTrainer-PyTorch/docs/reports/MODEL_SELECTION_DECISION_CURRENT.md`.
 
 ### Phase 6D — Persistent results index and traceability
 **Status: BLOCKED on 6C for inference; results CSV architecture is decided now**
@@ -537,23 +542,28 @@ Equivalent: `PASS = (B==NP) OR (A==NP)` / `FAIL = (B==IF) AND (A==IF)`
 
 ### Stage 6 — Model export verification
 
-**Both models confirmed from `model_exports/esp32_port/`:**
+**Single model confirmed from `model_exports/esp32_port/` (rescoped 2026-07-14 — Model A removed):**
 
 | Item | Confirmed |
 |------|-----------|
-| Feature schema version | `2026-06-19-export` |
+| Feature schema version | `2026-06-19-export` (unchanged — feature formulas unaffected by model rescoping) |
 | Feature count | 22 |
-| Feature order | Identical in FEATURE_SCHEMA.json, model_a/feature_order.json, model_b/feature_order.json |
-| Scaler/imputer | None (both models) |
+| Feature order | `FEATURE_SCHEMA.json`, `model_b_loocv947_coarse_tree/feature_order.json` (identical) |
+| Scaler/imputer | None |
 | Input dtype | float32 |
-| NaN handling | Caller must validate; no imputation in models |
-| Class mapping | 0=NP (PASS), 1=IF (FAIL) — both models |
-| Model B type | DecisionTreeClassifier, 5 nodes, max depth 2 |
-| Model B key features | Node 0: MinPositionStage3 (idx 16); Node 2: FFT_FrequencyBandwidth (idx 9) |
-| Model A type | BaggingClassifier (200 SubspaceKNN estimators) |
-| Model A size | Large — see portable_model.json; consider RAM before implementing |
+| NaN handling | Caller must validate; no imputation in model |
+| Class mapping | 0=NP (PASS), 1=IF (FAIL) |
+| Model type | DecisionTreeClassifier, 5 nodes, max depth 2 |
+| Model key features | Node 0: MinPositionStage3 (idx 16); Node 2: FFT_FrequencyBandwidth (idx 9) |
+| Accuracy | 94.7% LOOCV (36/38 held-out) vs. 100% resubstitution on this deployed artifact — two distinct figures, see `MODEL_SELECTION.md` |
 
-**Golden vectors:** `model_exports/esp32_port/golden_vectors/golden_vectors.csv` — use these for inference verification once feature extraction is implemented.
+**Golden vectors:** `model_exports/esp32_port/golden_vectors/golden_vectors.csv` — all 38 `original38`
+rows (rescoped 2026-07-14; previously 8 rows mixing training-anchor and mismatched GAP-policy
+samples). Both `model_predicted_class` (the real deployed-artifact output — what firmware must
+reproduce) and `loocv_held_out_prediction` (the honest generalization estimate) are recorded per
+row; do not conflate them. Use these for inference verification once feature extraction is
+implemented. No GAP-set golden vectors are included in this package — GAP-distribution
+verification is out of scope for this POC.
 
 ---
 

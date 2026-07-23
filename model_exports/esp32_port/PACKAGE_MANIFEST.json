@@ -1,7 +1,11 @@
 {
   "created_at_utc": "2026-06-19T01:52:25.008402+00:00",
-  "package_root": "exports\\esp32_port",
-  "sklearn_runtime_version": "1.5.2",
+  "updated_at_utc": "2026-07-14T00:00:00+00:00",
+  "package_root": "model_exports\\esp32_port",
+  "source_repo": "WeldMLTrainer-PyTorch, exports\\esp32_port (synced 2026-07-14)",
+  "package_scope": "single-model-poc",
+  "sklearn_runtime_version": "1.8.0",
+  "scope_change_note": "Rescoped from a dual-model (A+B) planning package to a single-model proof-of-concept. Model A (Subspace KNN) and the old GAP-derived golden vectors were removed entirely from this firmware repo on 2026-07-14 (not relocated here - see 'excluded_from_scope' for where the historical record now lives). This also simplifies Stage 6C: no on-device KNN / RAM-streaming implementation is needed, only the single Coarse Tree.",
   "files": [
     "CLASS_MAPPING.json",
     "FEATURE_SCHEMA.json",
@@ -11,15 +15,6 @@
     "REPRODUCTION_COMMANDS.md",
     "golden_vectors\\golden_vectors.csv",
     "golden_vectors\\golden_vectors.json",
-    "model_a_gap100_subspace_knn\\20251219_033334Z_subspace_knn.joblib",
-    "model_a_gap100_subspace_knn\\20251219_033334Z_subspace_knn.json",
-    "model_a_gap100_subspace_knn\\20251219_033801Z_subspace_knn.joblib",
-    "model_a_gap100_subspace_knn\\20251219_033801Z_subspace_knn.json",
-    "model_a_gap100_subspace_knn\\README.md",
-    "model_a_gap100_subspace_knn\\class_mapping.json",
-    "model_a_gap100_subspace_knn\\feature_order.json",
-    "model_a_gap100_subspace_knn\\portable_model.json",
-    "model_a_gap100_subspace_knn\\preprocessing.json",
     "model_b_loocv947_coarse_tree\\20260428_083434Z_coarse_tree.joblib",
     "model_b_loocv947_coarse_tree\\20260428_083434Z_coarse_tree.json",
     "model_b_loocv947_coarse_tree\\README.md",
@@ -28,9 +23,19 @@
     "model_b_loocv947_coarse_tree\\portable_model.json",
     "model_b_loocv947_coarse_tree\\preprocessing.json"
   ],
+  "firmware_repo_only_files": {
+    "note": "These two files are not part of the base export package (they don't exist in the trainer repo's exports/esp32_port/) - they were copied separately from the trainer repo's src/weldmltrainer/ as formula reference material for Q10 (FSJ column -> feature mapping) and remain valid; feature formulas are unaffected by the model-selection rescoping.",
+    "paths": [
+      "feature_extraction.py",
+      "parse_and_clean.py"
+    ]
+  },
+  "excluded_from_scope": {
+    "note": "Model A (Subspace KNN) artifacts and the GAP evaluation preview are NOT present in this firmware repo as of 2026-07-14. The historical record (why Model A and the dual-model cascade were evaluated and rejected) lives in the trainer repo only: WeldMLTrainer-PyTorch/docs/reports/model_a_gap100_subspace_knn/ and WeldMLTrainer-PyTorch/docs/reports/GAP_SPOSM_GE_ZERO_EVALUATION_PREVIEW.md."
+  },
   "missing_or_uncertain_items": [
     "Exact physical units are partly inferred from feature names/source logs; verify against feature_extraction.py and original sensor documentation before firmware release.",
-    "Model A sklearn pickle version mismatch remains a portability risk; portable_model.json should be treated as the firmware source representation instead of unpickling on target.",
-    "No final dual-model decision policy is included by design."
+    "No GAP-distribution evaluation is included in this package by design; the model is not claimed to generalize beyond the original38 training distribution (see docs/reports/MODEL_SELECTION_DECISION_CURRENT.md).",
+    "golden_vectors.json reports two distinct accuracy figures (94.7% LOOCV vs. 100% deployed-artifact resubstitution) - do not conflate them; see golden_vectors.json's accuracy_note field."
   ]
 }
