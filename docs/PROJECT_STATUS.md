@@ -5,11 +5,15 @@ Update this at the end of each working session and commit it with the session's 
 
 ---
 
-## Session Update — 2026-07-23 (Stage 6B feature extraction implemented)
+## Session Handoff — 2026-07-23 (Stage 6B complete; Stage 6C next)
+
+**Reason for handoff:** User reported context at `197K/258K`, which is past the project
+handoff threshold. Stop implementation work and preserve exact state before continuing.
 
 **Branch:** `main`
-**Working tree before commit:** DIRTY with Stage 6B code/tests/docs changes; `test_data/`
-remains untracked fixture data.
+**Last commit:** `0e33c8f` — `weld_parser: implement Stage 6B feature extraction`
+**Working tree:** DIRTY only because `test_data/` is untracked fixture data. No tracked
+code changes remain after this handoff commit.
 
 **What was done this session:**
 
@@ -47,6 +51,22 @@ Implement Stage 6C inference using only the single Coarse Tree model from
 `model_exports/esp32_port/model_b_loocv947_coarse_tree/`. Use the Stage 6B
 `fsj_extract_features()` output as the model input. Do not implement Model A, KNN,
 ensemble voting, or any cascade/rescue policy.
+
+**Exact next-session prompt:**
+
+```
+Read docs/PROJECT_STATUS.md and docs/OPEN_QUESTIONS.md first.
+
+Stage 6B feature extraction is complete and committed as 0e33c8f.
+Stage 6C is the next implementation task and is single-model only:
+Coarse Tree from model_exports/esp32_port/model_b_loocv947_coarse_tree/.
+
+Implement ESP32-side inference using fsj_extract_features() output as the fixed
+22-feature input vector. Port only the Coarse Tree exported artifacts. Add host-side
+tests that feed golden_vectors.csv/json feature rows directly into the tree and verify
+predictions. Do not implement Model A, KNN, ensemble voting, cascade, or rescue policy.
+Do not inspect .env.
+```
 
 ---
 
