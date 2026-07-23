@@ -19,6 +19,61 @@ static const char *TAG = "weld_parser";
 
 #define LINE_BUF        256
 #define INITIAL_WIN_CAP 512
+#define FFT_PAD_LENGTH  4096
+#define CWT_SCALE_COUNT 6
+#define CWT_WAVELET_POINTS 4096
+#define FEATURE_EPSILON 1.0e-12f
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+static const float CWT_SCALES[CWT_SCALE_COUNT] = {1.0f, 2.0f, 4.0f, 8.0f, 16.0f, 32.0f};
+
+typedef struct {
+    bool prev_stage2_valid;
+    float prev_stage2_pos;
+    float prev_stage2_time;
+    bool t30_found;
+    bool t25_found;
+    float t30;
+    float t25;
+    bool closest30_found;
+    bool closest25_found;
+    float closest30_abs_delta;
+    float closest25_abs_delta;
+    float closest30_time;
+    float closest25_time;
+    bool max_force_found;
+    float max_force_below_3mm;
+    bool min_pos_found;
+    float min_position_stage3;
+} stage_metric_accum_t;
+
+static const char *FEATURE_NAMES[FSJ_FEATURE_COUNT] = {
+    "RotationSpeed",
+    "CWT_DominantScale",
+    "CWT_EnergyEntropy",
+    "CWT_MaxScaleEnergy",
+    "CWT_MinScaleEnergy",
+    "CWT_TotalEnergy",
+    "ClearanceFactor",
+    "CrestFactor",
+    "FFT_DominantFreq",
+    "FFT_FrequencyBandwidth",
+    "FFT_SpectralCentroid",
+    "FFT_SpectralFlatness",
+    "FFT_SpectralSpread",
+    "ImpulseFactor",
+    "MaxForceBelow3mm",
+    "Mean",
+    "MinPositionStage3",
+    "PeakValue",
+    "PlungeVelocity",
+    "RMS",
+    "ShapeFactor",
+    "StandardDeviation",
+};
 
 /* Strip trailing \r and \n from a mutable string. */
 static void strip_crlf(char *s)
@@ -56,6 +111,106 @@ static bool buf_append(fsj_row_t **buf, uint32_t *count, uint32_t *cap,
     return true;
 }
 
+static float safe_div(float num, float den)
+{
+    return (fabsf(den) > FEATURE_EPSILON) ? (num / den) : NAN;
+}
+
+static float interp_crossing(float p1, float t1, float p2, float t2, float target)
+{
+    if (p1 == target) {
+        return t1;
+    }
+    if (p2 == target) {
+        return t2;
+    }
+    float ratio = (target - p1) / (p2 - p1);
+    return t1 + ratio * (t2 - t1);
+}
+
+static void update_closest(float pos, float time, float target,
+                           bool *found, float *best_delta, float *best_time)
+{
+    float delta = fabsf(pos - target);
+    if (!*found || delta < *best_delta) {
+        *found = true;
+        *best_delta = delta;
+        *best_time = time;
+    }
+}
+
+static void update_crossing(stage_metric_accum_t *acc, float pos, float time, float target,
+                            bool *target_found, float *target_time)
+{
+    if (*target_found || !acc->prev_stage2_valid) {
+        return;
+    }
+    float p1 = acc->prev_stage2_pos;
+    float t1 = acc->prev_stage2_time;
+    float p2 = pos;
+    float t2 = time;
+    if (p1 == target || p2 == target || (p1 - target) * (p2 - target) < 0.0f) {
+        *target_time = interp_crossing(p1, t1, p2, t2, target);
+        *target_found = true;
+    }
+}
+
+static void stage_metrics_update(stage_metric_accum_t *acc, const float v[FSJ_NUM_COLS])
+{
+    int stage = (int)v[FSJ_COL_STAGE];
+    float pos = v[FSJ_COL_POS7];
+    float load = v[FSJ_COL_LOADCELL];
+    float time = v[FSJ_COL_TIME];
+
+    if ((stage == 2 || stage == 3) && pos < 3.0f) {
+        if (!acc->max_force_found || load > acc->max_force_below_3mm) {
+            acc->max_force_found = true;
+            acc->max_force_below_3mm = load;
+        }
+    }
+
+    if (stage == 3 && pos < 3.0f) {
+        if (!acc->min_pos_found || pos < acc->min_position_stage3) {
+            acc->min_pos_found = true;
+            acc->min_position_stage3 = pos;
+        }
+    }
+
+    if (stage == 2) {
+        update_crossing(acc, pos, time, 3.0f, &acc->t30_found, &acc->t30);
+        update_crossing(acc, pos, time, 2.5f, &acc->t25_found, &acc->t25);
+        update_closest(pos, time, 3.0f, &acc->closest30_found,
+                       &acc->closest30_abs_delta, &acc->closest30_time);
+        update_closest(pos, time, 2.5f, &acc->closest25_found,
+                       &acc->closest25_abs_delta, &acc->closest25_time);
+        acc->prev_stage2_valid = true;
+        acc->prev_stage2_pos = pos;
+        acc->prev_stage2_time = time;
+    } else {
+        acc->prev_stage2_valid = false;
+    }
+}
+
+static fsj_stage_metrics_t stage_metrics_finish(const stage_metric_accum_t *acc)
+{
+    fsj_stage_metrics_t metrics = {0};
+    float t30 = acc->t30_found ? acc->t30 : acc->closest30_time;
+    float t25 = acc->t25_found ? acc->t25 : acc->closest25_time;
+    bool have_t30 = acc->t30_found || acc->closest30_found;
+    bool have_t25 = acc->t25_found || acc->closest25_found;
+
+    if (have_t30 && have_t25 && t25 != t30) {
+        metrics.plunge_velocity = 0.5f / fabsf(t25 - t30);
+    }
+    if (acc->min_pos_found) {
+        metrics.min_position_stage3 = acc->min_position_stage3;
+    }
+    if (acc->max_force_found) {
+        metrics.max_force_below_3mm = acc->max_force_below_3mm;
+    }
+    return metrics;
+}
+
 const char *fsj_status_str(fsj_status_t s)
 {
     switch (s) {
@@ -64,8 +219,14 @@ const char *fsj_status_str(fsj_status_t s)
         case FSJ_ERR_FORMAT: return "FSJ_ERR_FORMAT";
         case FSJ_ERR_WINDOW: return "FSJ_ERR_WINDOW";
         case FSJ_ERR_NOMEM:  return "FSJ_ERR_NOMEM";
+        case FSJ_ERR_FEATURE: return "FSJ_ERR_FEATURE";
         default:             return "FSJ_ERR_UNKNOWN";
     }
+}
+
+const char *fsj_feature_name(uint32_t index)
+{
+    return (index < FSJ_FEATURE_COUNT) ? FEATURE_NAMES[index] : NULL;
 }
 
 void fsj_result_free(fsj_result_t *result)
@@ -155,6 +316,7 @@ fsj_status_t fsj_parse_file(const char *path, fsj_result_t *out)
     float        rotate_rpm  = 0.0f;
     bool         rotate_found = false;
     float        prev_dt     = 0.0f;   /* for sample rate detection */
+    stage_metric_accum_t stage_acc = {0};
 
     while (fgets(line, sizeof(line), f)) {
         strip_crlf(line);
@@ -166,10 +328,10 @@ fsj_status_t fsj_parse_file(const char *path, fsj_result_t *out)
 
         if (in_footer) {
             /*
-             * Extract ROTATE from STAGE 3 footer line.
-             * Format: "STAGE 3 ... ROTATE = {value}"
+             * Extract ROTATE from the first footer match, matching trainer export.
+             * Format: "STAGE N ... ROTATE = {value}"
              */
-            if (strncmp(line, "STAGE 3 ", 8) == 0) {
+            if (!rotate_found) {
                 const char *p = strstr(line, "ROTATE = ");
                 if (p) {
                     float r;
@@ -210,6 +372,7 @@ fsj_status_t fsj_parse_file(const char *path, fsj_result_t *out)
 
         float sposm = v[FSJ_COL_SPOSM];
         float stage = v[FSJ_COL_STAGE];
+        stage_metrics_update(&stage_acc, v);
 
         /* Window start: first row where S.POS.M >= 0 */
         if (!in_window && sposm >= 0.0f) {
@@ -275,6 +438,7 @@ fsj_status_t fsj_parse_file(const char *path, fsj_result_t *out)
     out->window_rows      = win_buf;
     out->meta.rotate_rpm  = rotate_rpm;
     out->meta.rotate_found = rotate_found;
+    out->stage_metrics    = stage_metrics_finish(&stage_acc);
 
     FSJ_LOGI(TAG, "%s: rows=%" PRIu32 " window=[%" PRIu32 "..%" PRIu32
              "] count=%" PRIu32 " rotate=%.0f",
@@ -282,5 +446,290 @@ fsj_status_t fsj_parse_file(const char *path, fsj_result_t *out)
              out->window_start_row, out->window_end_row,
              out->window_count, (double)rotate_rpm);
 
+    return FSJ_OK;
+}
+
+static fsj_status_t compute_time_features(const fsj_result_t *parsed, fsj_features_t *out)
+{
+    uint32_t n = parsed->window_count;
+    if (n == 0) {
+        return FSJ_ERR_FEATURE;
+    }
+
+    double sum = 0.0;
+    double sum_sq = 0.0;
+    double sum_abs = 0.0;
+    double sum_sqrt_abs = 0.0;
+    float peak = 0.0f;
+
+    for (uint32_t i = 0; i < n; i++) {
+        float x = parsed->window_rows[i].cols[FSJ_COL_LOADCELL];
+        float ax = fabsf(x);
+        sum += x;
+        sum_sq += (double)x * (double)x;
+        sum_abs += ax;
+        sum_sqrt_abs += sqrtf(ax);
+        if (ax > peak) {
+            peak = ax;
+        }
+    }
+
+    float mean = (float)(sum / (double)n);
+    float rms = sqrtf((float)(sum_sq / (double)n));
+    float stddev = 0.0f;
+    if (n > 1) {
+        double var_sum = 0.0;
+        for (uint32_t i = 0; i < n; i++) {
+            double d = (double)parsed->window_rows[i].cols[FSJ_COL_LOADCELL] - (double)mean;
+            var_sum += d * d;
+        }
+        stddev = sqrtf((float)(var_sum / (double)(n - 1)));
+    } else {
+        stddev = NAN;
+    }
+
+    float mean_abs = (float)(sum_abs / (double)n);
+    float mean_sqrt_abs = (float)(sum_sqrt_abs / (double)n);
+
+    out->values[FSJ_FEATURE_MEAN] = mean;
+    out->values[FSJ_FEATURE_RMS] = rms;
+    out->values[FSJ_FEATURE_STANDARD_DEVIATION] = stddev;
+    out->values[FSJ_FEATURE_PEAK_VALUE] = peak;
+    out->values[FSJ_FEATURE_SHAPE_FACTOR] = safe_div(rms, mean_abs);
+    out->values[FSJ_FEATURE_CREST_FACTOR] = safe_div(peak, rms);
+    out->values[FSJ_FEATURE_CLEARANCE_FACTOR] = safe_div(peak, mean_sqrt_abs * mean_sqrt_abs);
+    out->values[FSJ_FEATURE_IMPULSE_FACTOR] = safe_div(peak, mean_abs);
+    return FSJ_OK;
+}
+
+static float fft_mean_dt_padded_like_trainer(const fsj_result_t *parsed)
+{
+    uint32_t n = parsed->window_count;
+    if (n < 2) {
+        return 1.0f;
+    }
+    uint32_t used = (n < FFT_PAD_LENGTH) ? n : FFT_PAD_LENGTH;
+    float first = parsed->window_rows[0].cols[FSJ_COL_TIME];
+    float last = parsed->window_rows[used - 1].cols[FSJ_COL_TIME];
+    float mean_dt = (last - first) / (float)(FFT_PAD_LENGTH - 1);
+    return (mean_dt > 0.0f) ? mean_dt : 1.0f;
+}
+
+static fsj_status_t compute_fft_features(const fsj_result_t *parsed, fsj_features_t *out)
+{
+    uint32_t n = parsed->window_count;
+    if (n == 0) {
+        return FSJ_ERR_FEATURE;
+    }
+
+    double sum = 0.0;
+    for (uint32_t i = 0; i < n; i++) {
+        sum += parsed->window_rows[i].cols[FSJ_COL_LOADCELL];
+    }
+    float mean = (float)(sum / (double)n);
+    uint32_t used = (n < FFT_PAD_LENGTH) ? n : FFT_PAD_LENGTH;
+    float mean_dt = fft_mean_dt_padded_like_trainer(parsed);
+    float freq_step = 1.0f / ((float)FFT_PAD_LENGTH * mean_dt);
+
+    double power_sum = 0.0;
+    double weighted_freq_sum = 0.0;
+    double log_power_sum = 0.0;
+    double max_power = -1.0;
+    uint32_t dominant_idx = 0;
+    uint32_t power_count = FFT_PAD_LENGTH / 2 + 1;
+    double *powers = calloc(power_count, sizeof(double));
+    if (!powers) {
+        return FSJ_ERR_NOMEM;
+    }
+
+    for (uint32_t k = 0; k < power_count; k++) {
+        double real = 0.0;
+        double imag = 0.0;
+        for (uint32_t t = 0; t < used; t++) {
+            double x = (double)parsed->window_rows[t].cols[FSJ_COL_LOADCELL] - (double)mean;
+            double angle = -2.0 * M_PI * (double)k * (double)t / (double)FFT_PAD_LENGTH;
+            real += x * cos(angle);
+            imag += x * sin(angle);
+        }
+        double power = real * real + imag * imag;
+        powers[k] = power;
+        float freq = (float)k * freq_step;
+        power_sum += power;
+        weighted_freq_sum += (double)freq * power;
+        log_power_sum += log(power + FEATURE_EPSILON);
+        if (power > max_power) {
+            max_power = power;
+            dominant_idx = k;
+        }
+    }
+
+    float dominant_freq = (float)dominant_idx * freq_step;
+    float centroid = (power_sum > 0.0) ? (float)(weighted_freq_sum / power_sum) : NAN;
+    double spread_sum = 0.0;
+    if (power_sum > 0.0 && isfinite(centroid)) {
+        for (uint32_t k = 0; k < power_count; k++) {
+            double freq = (double)((float)k * freq_step);
+            double d = freq - (double)centroid;
+            spread_sum += d * d * powers[k];
+        }
+    }
+    float spread = (power_sum > 0.0) ? sqrtf((float)(spread_sum / power_sum)) : NAN;
+
+    double half_power = max_power / 2.0;
+    uint32_t first_above = 0;
+    uint32_t last_above = 0;
+    bool above_found = false;
+    for (uint32_t k = 0; k < power_count; k++) {
+        if (powers[k] >= half_power) {
+            if (!above_found) {
+                first_above = k;
+                above_found = true;
+            }
+            last_above = k;
+        }
+    }
+    float bandwidth = above_found ? ((float)(last_above - first_above) * freq_step) : 0.0f;
+    float mean_power = (float)(power_sum / (double)power_count);
+    float flatness = expf((float)(log_power_sum / (double)power_count))
+                   / (mean_power + FEATURE_EPSILON);
+
+    out->values[FSJ_FEATURE_FFT_DOMINANT_FREQ] = dominant_freq;
+    out->values[FSJ_FEATURE_FFT_SPECTRAL_CENTROID] = centroid;
+    out->values[FSJ_FEATURE_FFT_SPECTRAL_SPREAD] = spread;
+    out->values[FSJ_FEATURE_FFT_FREQUENCY_BANDWIDTH] = bandwidth;
+    out->values[FSJ_FEATURE_FFT_SPECTRAL_FLATNESS] = flatness;
+    free(powers);
+    return FSJ_OK;
+}
+
+static float morlet_integral_sample(uint32_t idx)
+{
+    static bool initialized = false;
+    static float integral[CWT_WAVELET_POINTS];
+    if (!initialized) {
+        float step = 16.0f / (float)(CWT_WAVELET_POINTS - 1);
+        float sum = 0.0f;
+        for (uint32_t i = 0; i < CWT_WAVELET_POINTS; i++) {
+            float x = -8.0f + (float)i * step;
+            float psi = expf(-(x * x) * 0.5f) * cosf(5.0f * x);
+            sum += psi * step;
+            integral[i] = sum;
+        }
+        initialized = true;
+    }
+    return integral[idx];
+}
+
+static uint32_t cwt_reversed_wavelet_index(uint32_t reversed_sample, float scale)
+{
+    float step = 16.0f / (float)(CWT_WAVELET_POINTS - 1);
+    uint32_t idx = (uint32_t)floorf((float)reversed_sample / (scale * step));
+    return (idx < CWT_WAVELET_POINTS) ? idx : (CWT_WAVELET_POINTS - 1);
+}
+
+static fsj_status_t compute_cwt_features(const fsj_result_t *parsed, fsj_features_t *out)
+{
+    uint32_t n = parsed->window_count;
+    if (n == 0) {
+        return FSJ_ERR_FEATURE;
+    }
+
+    double total_energy = 0.0;
+    double scale_energies[CWT_SCALE_COUNT] = {0};
+
+    for (uint32_t s = 0; s < CWT_SCALE_COUNT; s++) {
+        float scale = CWT_SCALES[s];
+        uint32_t kernel_len = (uint32_t)floorf(scale * 16.0f) + 1;
+        uint32_t conv_len = n + kernel_len - 1;
+        uint32_t coef_len = (conv_len > 0) ? conv_len - 1 : 0;
+        float trim = ((float)coef_len - (float)n) * 0.5f;
+        uint32_t start = (uint32_t)floorf(trim);
+        float sqrt_scale = sqrtf(scale);
+
+        for (uint32_t out_idx = 0; out_idx < n; out_idx++) {
+            uint32_t coef_idx = start + out_idx;
+            double conv0 = 0.0;
+            double conv1 = 0.0;
+            for (uint32_t m = 0; m < kernel_len; m++) {
+                if (coef_idx >= m) {
+                    uint32_t data_idx = coef_idx - m;
+                    if (data_idx < n) {
+                        uint32_t base_idx = cwt_reversed_wavelet_index(kernel_len - 1 - m, scale);
+                        conv0 += (double)parsed->window_rows[data_idx].cols[FSJ_COL_LOADCELL]
+                               * (double)morlet_integral_sample(base_idx);
+                    }
+                }
+                if (coef_idx + 1 >= m) {
+                    uint32_t data_idx = coef_idx + 1 - m;
+                    if (data_idx < n) {
+                        uint32_t base_idx = cwt_reversed_wavelet_index(kernel_len - 1 - m, scale);
+                        conv1 += (double)parsed->window_rows[data_idx].cols[FSJ_COL_LOADCELL]
+                               * (double)morlet_integral_sample(base_idx);
+                    }
+                }
+            }
+            float coef = -sqrt_scale * (float)(conv1 - conv0);
+            scale_energies[s] += (double)coef * (double)coef;
+        }
+        total_energy += scale_energies[s];
+    }
+
+    if (total_energy == 0.0) {
+        out->values[FSJ_FEATURE_CWT_TOTAL_ENERGY] = 0.0f;
+        out->values[FSJ_FEATURE_CWT_DOMINANT_SCALE] = NAN;
+        out->values[FSJ_FEATURE_CWT_ENERGY_ENTROPY] = NAN;
+        out->values[FSJ_FEATURE_CWT_MAX_SCALE_ENERGY] = 0.0f;
+        out->values[FSJ_FEATURE_CWT_MIN_SCALE_ENERGY] = 0.0f;
+        return FSJ_OK;
+    }
+
+    uint32_t dominant = 0;
+    double max_energy = scale_energies[0];
+    double min_energy = scale_energies[0];
+    double entropy = 0.0;
+    for (uint32_t s = 0; s < CWT_SCALE_COUNT; s++) {
+        if (scale_energies[s] > max_energy) {
+            max_energy = scale_energies[s];
+            dominant = s;
+        }
+        if (scale_energies[s] < min_energy) {
+            min_energy = scale_energies[s];
+        }
+        double norm = scale_energies[s] / total_energy;
+        entropy += -norm * log(norm + FEATURE_EPSILON);
+    }
+
+    out->values[FSJ_FEATURE_CWT_TOTAL_ENERGY] = (float)total_energy;
+    out->values[FSJ_FEATURE_CWT_DOMINANT_SCALE] = CWT_SCALES[dominant];
+    out->values[FSJ_FEATURE_CWT_ENERGY_ENTROPY] = (float)entropy;
+    out->values[FSJ_FEATURE_CWT_MAX_SCALE_ENERGY] = (float)max_energy;
+    out->values[FSJ_FEATURE_CWT_MIN_SCALE_ENERGY] = (float)min_energy;
+    return FSJ_OK;
+}
+
+fsj_status_t fsj_extract_features(const fsj_result_t *parsed, fsj_features_t *out)
+{
+    if (!parsed || !out || parsed->status != FSJ_OK || !parsed->window_rows ||
+        parsed->window_count == 0 || !parsed->meta.rotate_found) {
+        return FSJ_ERR_FEATURE;
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->values[FSJ_FEATURE_ROTATION_SPEED] = parsed->meta.rotate_rpm;
+    out->values[FSJ_FEATURE_MAX_FORCE_BELOW_3MM] = parsed->stage_metrics.max_force_below_3mm;
+    out->values[FSJ_FEATURE_MIN_POSITION_STAGE3] = parsed->stage_metrics.min_position_stage3;
+    out->values[FSJ_FEATURE_PLUNGE_VELOCITY] = parsed->stage_metrics.plunge_velocity;
+
+    if (compute_time_features(parsed, out) != FSJ_OK ||
+        compute_fft_features(parsed, out) != FSJ_OK ||
+        compute_cwt_features(parsed, out) != FSJ_OK) {
+        return FSJ_ERR_FEATURE;
+    }
+
+    for (uint32_t i = 0; i < FSJ_FEATURE_COUNT; i++) {
+        if (!isfinite(out->values[i])) {
+            return FSJ_ERR_FEATURE;
+        }
+    }
     return FSJ_OK;
 }

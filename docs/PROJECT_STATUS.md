@@ -5,6 +5,51 @@ Update this at the end of each working session and commit it with the session's 
 
 ---
 
+## Session Update — 2026-07-23 (Stage 6B feature extraction implemented)
+
+**Branch:** `main`
+**Working tree before commit:** DIRTY with Stage 6B code/tests/docs changes; `test_data/`
+remains untracked fixture data.
+
+**What was done this session:**
+
+1. Read `docs/PROJECT_STATUS.md` and `docs/OPEN_QUESTIONS.md` before touching code.
+2. Implemented Stage 6B feature extraction in `components/weld_parser/` for the fixed
+   22-feature schema used by `model_b_loocv947_coarse_tree/feature_order.json`.
+3. Added parse-time stage metrics needed for full-file formulas:
+   `MaxForceBelow3mm`, `MinPositionStage3`, and `PlungeVelocity`.
+4. Implemented raw LOADCELL time-domain, FFT, and Morlet CWT feature families.
+5. Corrected footer `ROTATE` parsing to use the first footer match, matching the trainer export.
+6. Added focused host-side feature tests under `tests/host/`, including Python-reference
+   assertions for FFT and CWT on a synthetic FSJ fixture.
+7. Added hidden board capability Kconfig symbols so the Waveshare explicit-board build no
+   longer emits unknown-symbol warnings.
+
+**Validation performed:**
+
+- Host test: `ctest --test-dir /tmp/weldml-host-tests --output-on-failure` — PASS.
+- Trainer reference comparison for synthetic fixture values using
+  `/home/casey/WeldMLTrainer/.venv_wsl/bin/python` — PASS via host assertions.
+- Firmware build: `. /home/casey/esp/esp-idf/export.sh && idf.py -D BOARD=waveshare-esp32-s3-lcd-147 build` — PASS with zero warnings in final run.
+- `git diff --check` — PASS.
+
+**Current project state:**
+
+- Stage 5: COMPLETE. Do not reopen.
+- Stage 6A parser: COMPLETE.
+- Stage 6B feature extraction: COMPLETE.
+- Stage 6C inference: NEXT, single-model only.
+- Do not build any Model A, KNN-distance, ensemble voting, or cascade infrastructure.
+
+**Exact next action:**
+
+Implement Stage 6C inference using only the single Coarse Tree model from
+`model_exports/esp32_port/model_b_loocv947_coarse_tree/`. Use the Stage 6B
+`fsj_extract_features()` output as the model input. Do not implement Model A, KNN,
+ensemble voting, or any cascade/rescue policy.
+
+---
+
 ## Session Handoff — 2026-07-23 (model export sync committed; Stage 6B next)
 
 **Reason for handoff:** Context reached the project yellow-threshold range reported by the user

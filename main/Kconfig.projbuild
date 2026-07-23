@@ -1,3 +1,25 @@
+menu "Board Capability Flags"
+
+    config BOARD_DUAL_CORE
+        bool
+
+    config BOARD_HAS_BT_CLASSIC
+        bool
+
+    config BOARD_HAS_BLE
+        bool
+
+    config BOARD_HAS_WIFI
+        bool
+
+    config BOARD_HAS_NATIVE_USB
+        bool
+
+    config BOARD_HAS_ZIGBEE
+        bool
+
+endmenu
+
 menu "ESP32 Base Template Config"
 
     config WIFI_SSID
