@@ -17,6 +17,21 @@ sections below are historical continuity records, not active stop conditions.
 
 ---
 
+## MVP STATUS: COMPLETE (declared 2026-07-23)
+
+All `docs/MVP_REQUIREMENTS.md` scope is implemented and hardware-verified on the
+Waveshare ESP32-S3-LCD-1.47: SD file detection, FSJ parsing, 22-feature extraction,
+Coarse Tree inference, PASS/FAIL decision, full-screen LCD color states with centered
+status text (READY/WRITING/PROCESS/PASS/FAIL), and `weldml_results.csv` logging.
+esp-dsp FFT optimization brings total cycle time to ~6 s. All Q1–Q10 open questions
+are resolved. WS2812B RGB LED is formally descoped (LCD is the sole status output).
+
+Do not reopen this scope or treat `MVP_REQUIREMENTS.md` items as gaps without the
+user explicitly unlocking new work. Any further firmware work is a new milestone,
+not MVP completion. See the handoff below for the final verification session.
+
+---
+
 ## Session Handoff — 2026-07-23 (added rotated status text labels on LCD)
 
 **Branch:** `main`
