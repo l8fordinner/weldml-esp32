@@ -17,6 +17,107 @@ sections below are historical continuity records, not active stop conditions.
 
 ---
 
+## Session Handoff — 2026-07-23 (performance investigation; timing build ready to flash)
+
+**Branch:** `main`
+**Last commit:** `b0f0660` — no new commits this session
+**Working tree:** DIRTY — 4 files modified, build artifacts in `build/`, binaries already SCP'd to Pi
+
+### What was done this session
+
+1. Corrected test fixture choice: l314/l320 are GAP welds (out-of-distribution). Correct test
+   fixtures are `l060.fsj` (LOOCV/NP, in original38) and `l046.fsj` (LOOCV/IF, in original38).
+   Confirmed via `model_exports/esp32_port/golden_vectors/golden_vectors.csv`.
+2. Built and flashed LED fix + CSV logging firmware (from prior handoff's uncommitted changes).
+   Flash: manual Key1+Key2 download mode → `--before no-reset --no-stub` Pi SSH esptool.
+   After flash must press Key2 again to boot (hard-reset via RTS doesn't exit download mode on this board).
+3. Tested with l060.fsj: processed correctly, green blinks visible, but processing took ~2 minutes.
+4. Identified green blink too similar to yellow (writing). Changed to dark green / black blink.
+5. Investigated performance bottleneck:
+   - Float CWT conversion (doubles → floats in `compute_cwt_features`): done, didn't help noticeably.
+   - Float FFT conversion (doubles → floats, cos/sin → cosf/sinf in `compute_fft_features`): done.
+   - The FFT is a naive O(N²) DFT: 2049 × 1854 = 3.8M iterations with trig per output bin. Still slow.
+   - Serial monitor unavailable in MSC mode (ttyACM0 gone when USB switches to 303a:4003 CDC+MSC).
+6. Added per-stage timing written to `weldml_result.json` and `weldml_results.csv`:
+   - `parse_ms`: time for `fsj_parse_file()`
+   - `features_ms`: time for `fsj_extract_features()` (time domain + FFT + CWT)
+   - Also added per-sub-stage ESP_LOGI logs in `fsj_extract_features()` (not readable in MSC mode,
+     but useful when serial is available).
+
+### Working tree — modified files (NOT committed, build is current)
+
+| File | Change |
+|------|--------|
+| `components/weld_processor/weld_processor.c` | LED fix, blink (dark green/black, 5×1Hz), timing capture, parse_ms+features_ms in JSON+CSV |
+| `components/weld_parser/weld_parser.c` | Float CWT + float FFT (cosf/sinf), per-stage timing ESP_LOGI, esp_timer include |
+| `components/weld_parser/CMakeLists.txt` | Added `PRIV_REQUIRES esp_timer` |
+| `components/lcd_st7789/lcd_st7789.h` | Added `LCD_COLOR_GREEN_DARK 0x0300` |
+
+**Build is current and passing.** Binaries already SCP'd to Pi at `/tmp/*.bin`.
+
+### Key code changes summary
+
+**weld_processor.c:**
+- `process_fsj_file()`: captures `parse_ms` and `features_ms` around each step, passes to `write_result_json()`
+- `write_result_json()`: added `parse_ms`, `features_ms` params; writes `"timing":{"parse_ms":N,"features_ms":N}` to JSON
+- CSV header now includes `parse_ms,features_ms` columns
+- Result blink: 5× 1Hz, dark green (0x0300) / black for NP; red / black for IF
+
+**weld_parser.c:**
+- `compute_cwt_features()`: all doubles converted to float; `log()` → `logf()`
+- `compute_fft_features()`: all doubles converted to float; `cos()/sin()` → `cosf()/sinf()`; `calloc` uses `sizeof(float)` not `sizeof(double)`
+- `fsj_extract_features()`: ESP_LOGI timing around time_features, fft_features, cwt_features
+
+### Hardware state
+
+- Board: Waveshare ESP32-S3-LCD-1.47 on SLOT3 of Pi workbench (192.168.1.43)
+- Running: previous build (NOT the timing build — was about to flash when handoff called)
+- LCD: CYAN (idle after l060.fsj test)
+- Flash method: Key1+Key2 download mode → Pi SSH esptool; Key2 press required after flash to boot
+
+### Exact next action
+
+1. Flash timing build (binaries already on Pi):
+   ```
+   ssh casey@192.168.1.43 "python3 -m esptool --chip esp32s3 -p /dev/ttyACM0 -b 460800 --before no-reset --after hard-reset --no-stub write-flash --flash-mode dio --flash-freq 80m --flash-size 16MB 0x0 /tmp/bootloader.bin 0x8000 /tmp/partition-table.bin 0x10000 /tmp/weldml-esp32.bin"
+   ```
+2. User presses Key2 to boot.
+3. Copy l060.fsj to SD card:
+   ```
+   ssh casey@192.168.1.43 "sudo mount /dev/sda1 /tmp/sdmount && sudo cp /tmp/l060.fsj /tmp/sdmount/ && sudo sync && sudo umount /tmp/sdmount"
+   ```
+   (`l060.fsj` is already at `/tmp/l060.fsj` on the Pi from a previous SCP.)
+4. Wait for processing to complete (blinks), then read timing from SD:
+   ```
+   ssh casey@192.168.1.43 "sudo mount -o ro /dev/sda1 /tmp/sdmount && cat /tmp/sdmount/weldml_result.json && sudo umount /tmp/sdmount"
+   ```
+5. The JSON will contain `"timing":{"parse_ms":N,"features_ms":N}` — use these to decide next optimization:
+   - If `parse_ms` dominates: SD card I/O is the bottleneck (look at fgetc buffering or SPI clock).
+   - If `features_ms` dominates: FFT/CWT computation is the bottleneck — consider esp-dsp FFT (O(N log N), hardware).
+   - Target: total processing < 10 seconds.
+6. Once root cause is known, fix performance, then commit all pending changes:
+   ```
+   git add components/weld_processor/weld_processor.c components/weld_parser/weld_parser.c components/weld_parser/CMakeLists.txt components/lcd_st7789/lcd_st7789.h
+   git commit -m "weld_processor: LED pass/fail blink, CSV timing logging, float FFT/CWT"
+   ```
+
+### Performance context
+
+- The naive DFT in `compute_fft_features()` is O(N²): 2049 bins × up to 1854 samples = 3.8M trig calls.
+- Float cosf/sinf is hardware-FPU-assisted arithmetic but still a software polynomial on Xtensa LX7.
+- esp-dsp FFT (`dsps_fft2r_fc32`) would reduce to O(N log N) with Xtensa SIMD — likely 100× faster.
+- CWT is O(n × Σkernel_len) = 1.88M MACs for l060 — probably fast with float.
+- If features_ms confirms FFT is the bottleneck, add `esp-dsp` component and replace the DFT.
+- esp-dsp component: `idf_component_register(... PRIV_REQUIRES esp-dsp)` + `#include "esp_dsp.h"`.
+
+### Next-session prompt
+
+```
+Read docs/PROJECT_STATUS.md first.
+```
+
+---
+
 ## Session Handoff — 2026-07-23 (Stage 6C verified on hardware; LED fix + CSV logging pending build/flash)
 
 **Branch:** `main`
