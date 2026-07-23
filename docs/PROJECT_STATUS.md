@@ -83,27 +83,6 @@ Key changes:
 
 ```
 Read docs/PROJECT_STATUS.md first.
-
-Stage 6C is committed (d7441c3) and verified on hardware. weld_processor.c has
-uncommitted changes implementing:
-  1. GREEN = NP/PASS, RED = IF/FAIL (5s display then returns to CYAN)
-  2. weldml_results.csv append logging per cycle
-
-Build and flash are the immediate next step. The file builds cleanly — just needs
-idf.py build, scp to Pi, Key1+Key2 download mode, esptool flash.
-
-Flash command (after Key1+Key2):
-ssh casey@192.168.1.43 "python3 -m esptool --chip esp32s3 -p /dev/ttyACM0 -b 460800
---before no-reset --after hard-reset --no-stub write-flash --flash-mode dio
---flash-freq 80m --flash-size 16MB 0x0 /tmp/bootloader.bin 0x8000 /tmp/partition-table.bin
-0x10000 /tmp/weldml-esp32.bin"
-
-Test with GAP/NP fixture (l314.fsj) — expect RED (IF predicted due to fixture provenance
-mismatch) then CYAN. Test with GAP/IF fixture (l320.fsj) — expect RED then CYAN.
-Check weldml_results.csv on SD for accumulated log rows.
-
-Do not implement OTA, WiFi, BLE, or MQTT — out of scope.
-Do not inspect .env.
 ```
 
 ---
