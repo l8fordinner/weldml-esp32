@@ -112,9 +112,7 @@ sections below are historical continuity records, not active stop conditions.
 
 ### Next-session prompt
 
-```
 Read docs/PROJECT_STATUS.md first.
-```
 
 ---
 
