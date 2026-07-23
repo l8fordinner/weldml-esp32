@@ -21,6 +21,9 @@
 static const char *TAG = "weld_proc";
 
 #define IDLE_WINDOW_MS   5000
+#define LCD_TEXT_SCALE   7  /* rotated text runs along the 320px long axis; 7 is the largest
+                             * integer scale that fits the longest label (WRITING/PROCESS,
+                             * 7 chars) within that axis: 7*(6*7-1)=287 <= 320 */
 #define SD_MOUNT         "/sdcard"
 #define RESULT_PATH      SD_MOUNT "/weldml_result.json"
 #define RESULTS_CSV_PATH SD_MOUNT "/weldml_results.csv"
@@ -58,8 +61,16 @@ static void set_state(weld_state_t state)
         [WELD_STATE_SUCCESS]    = LCD_COLOR_GREEN,
         [WELD_STATE_FAILURE]    = LCD_COLOR_RED,
     };
+    static const char *label_map[] = {
+        [WELD_STATE_WAITING]    = "READY",
+        [WELD_STATE_WRITING]    = "WRITING",
+        [WELD_STATE_PROCESSING] = "PROCESS",
+        [WELD_STATE_SUCCESS]    = "PASS",
+        [WELD_STATE_FAILURE]    = "FAIL",
+    };
     s_state = state;
     lcd_st7789_fill(color_map[state]);
+    lcd_st7789_draw_text_centered(label_map[state], LCD_COLOR_BLACK, LCD_TEXT_SCALE);
 }
 
 /*
@@ -405,6 +416,7 @@ static void process_sd(void)
     bool pass = (prediction == WELD_INFERENCE_CLASS_NP);
     for (int i = 0; i < 5; i++) {
         lcd_st7789_fill(pass ? LCD_COLOR_GREEN : LCD_COLOR_RED);
+        lcd_st7789_draw_text_centered(pass ? "PASS" : "FAIL", LCD_COLOR_BLACK, LCD_TEXT_SCALE);
         vTaskDelay(pdMS_TO_TICKS(500));
         lcd_st7789_fill(LCD_COLOR_BLACK);
         vTaskDelay(pdMS_TO_TICKS(500));

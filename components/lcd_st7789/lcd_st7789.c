@@ -1,5 +1,7 @@
 #include "lcd_st7789.h"
 
+#include <string.h>
+
 #include "esp_lcd_io_spi.h"
 #include "esp_lcd_panel_st7789.h"
 #include "esp_lcd_panel_ops.h"
@@ -127,6 +129,107 @@ esp_err_t lcd_st7789_fill(uint16_t color)
     for (int y = 0; y < s_height; y += TILE_ROWS) {
         int rows = (y + TILE_ROWS <= s_height) ? TILE_ROWS : (s_height - y);
         ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(s_panel, 0, y, s_width, y + rows, s_tile));
+    }
+    return ESP_OK;
+}
+
+/*
+ * 5x7 bitmap font, row-major: 7 bytes per glyph, low 5 bits per byte are
+ * pixel columns (bit 4 = leftmost). Only letters used by weld_processor's
+ * status labels (READY, WRITING, PROCESS, PASS, FAIL) are populated;
+ * everything else is left zeroed (renders as blank).
+ */
+static const uint8_t s_font5x7[26][7] = {
+    ['A' - 'A'] = { 0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11 },
+    ['C' - 'A'] = { 0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E },
+    ['D' - 'A'] = { 0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E },
+    ['E' - 'A'] = { 0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F },
+    ['F' - 'A'] = { 0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10 },
+    ['G' - 'A'] = { 0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F },
+    ['I' - 'A'] = { 0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x1F },
+    ['L' - 'A'] = { 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F },
+    ['N' - 'A'] = { 0x11, 0x19, 0x15, 0x15, 0x13, 0x11, 0x11 },
+    ['O' - 'A'] = { 0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E },
+    ['P' - 'A'] = { 0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10 },
+    ['R' - 'A'] = { 0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11 },
+    ['S' - 'A'] = { 0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E },
+    ['T' - 'A'] = { 0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04 },
+    ['W' - 'A'] = { 0x11, 0x11, 0x11, 0x15, 0x15, 0x1B, 0x11 },
+    ['Y' - 'A'] = { 0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04 },
+};
+
+static const uint8_t *get_glyph(char c)
+{
+    if (c < 'A' || c > 'Z') {
+        return NULL;
+    }
+    return s_font5x7[c - 'A'];
+}
+
+esp_err_t lcd_st7789_draw_text_centered(const char *text, uint16_t fg_color, int scale)
+{
+    if (!s_panel || !text || scale <= 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    int len = (int)strlen(text);
+    if (len == 0) {
+        return ESP_OK;
+    }
+
+    /*
+     * Text is rendered rotated 90 deg clockwise from its normal upright
+     * glyph layout so it runs along the panel's long axis (height, 320 px)
+     * instead of the short axis (width, 172 px) -- this lets `scale` be
+     * roughly 2x larger than an unrotated centered layout would allow.
+     * Reading order: first character nearest the top of the screen.
+     *
+     * Derivation: a point (row, col) in the unrotated len*char_w x char_h
+     * text image maps under a 90 deg CW image rotation to
+     * (new_row, new_col) = (col, char_h - 1 - row) in a char_h x total_w
+     * image; new_row becomes screen_y (centered in s_height) and new_col
+     * becomes screen_x (centered in s_width). A row of "on" bits in a
+     * glyph becomes a scale-wide, run_len*scale-tall vertical bar in
+     * screen space, positioned by font row along x and by character index
+     * + column along y.
+     */
+    int char_w  = 5 * scale;
+    int char_h  = 7 * scale;
+    int spacing = scale;
+    int total_w = len * char_w + (len - 1) * spacing;
+
+    int x0 = (s_width  - char_h)  / 2;
+    int y0 = (s_height - total_w) / 2;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+
+    for (int i = 0; i < len; i++) {
+        char c = text[i];
+        if (c >= 'a' && c <= 'z') {
+            c = (char)(c - 'a' + 'A');
+        }
+        const uint8_t *glyph = get_glyph(c);
+        if (glyph) {
+            for (int row = 0; row < 7; row++) {
+                uint8_t bits = glyph[row];
+                int col = 0;
+                while (col < 5) {
+                    if (bits & (1 << (4 - col))) {
+                        int run_start = col;
+                        while (col < 5 && (bits & (1 << (4 - col)))) {
+                            col++;
+                        }
+                        int run_len = col - run_start;
+                        int screen_x = x0 + char_h - (row + 1) * scale;
+                        int screen_y = y0 + i * (char_w + spacing) + run_start * scale;
+                        ESP_ERROR_CHECK(lcd_st7789_fill_rect(
+                            screen_x, screen_y, scale, run_len * scale, fg_color));
+                    } else {
+                        col++;
+                    }
+                }
+            }
+        }
     }
     return ESP_OK;
 }

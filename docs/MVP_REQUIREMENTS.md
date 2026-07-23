@@ -118,16 +118,23 @@ more-conservative both-must-agree policy) — also not implemented, also superse
 The 1.47" ST7789V3 LCD (172×320, SPI) is the primary output, intended to be visible
 from across the room.
 
-| State | Screen |
-|-------|--------|
-| Waiting (idle, USB MSC ready) | Cyan (full screen) |
-| Host writing (SCSI WRITE10 active) | White (full screen) |
-| Processing (ESP reading/parsing SD) | Blue (full screen) |
-| Result: GOOD (NP) | Green (full screen) |
-| Result: BAD (IF) / error | Red (full screen) |
+| State | Screen | Center label |
+|-------|--------|--------------|
+| Waiting (idle, USB MSC ready) | Cyan (full screen) | READY |
+| Host writing (SCSI WRITE10 active) | White (full screen) | WRITING |
+| Processing (ESP reading/parsing SD) | Blue (full screen) | PROCESS |
+| Result: GOOD (NP) | Green (full screen) | PASS |
+| Result: BAD (IF) / error | Red (full screen) | FAIL |
 
-Full-screen color fills are sufficient. No text, icons, or progress bars are required
-for the MVP. The color must be unambiguous at room distance.
+Full-screen color fills are the primary signal and must remain unambiguous at room
+distance on their own. Each fill also displays a centered black text label (added
+2026-07-23; superseding the original "no text required" MVP note) as reinforcement
+for closer viewing — a built-in 5x7 bitmap font (`lcd_st7789_draw_text_centered()` in
+`components/lcd_st7789/`). The label is rendered rotated 90°, running along the
+panel's long 320px axis instead of its 172px-wide axis, at 7x scale — the largest
+integer scale that fits the longest label within that axis — so the letters are as
+large as the panel allows. The font only implements the uppercase letters needed for
+these five labels.
 
 LCD hardware interface:
 - Controller: ST7789V3 (may also be GC9307N on some production runs)

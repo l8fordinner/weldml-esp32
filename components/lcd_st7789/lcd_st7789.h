@@ -34,3 +34,19 @@ esp_err_t lcd_st7789_fill(uint16_t color_rgb565);
 
 /* Fill a rectangle (x, y are top-left; w and h in pixels). */
 esp_err_t lcd_st7789_fill_rect(int x, int y, int w, int h, uint16_t color_rgb565);
+
+/*
+ * Draw a single word, centered on screen, using a built-in 5x7 bitmap font.
+ * Only uppercase A-Z letters actually used by weld_processor status labels
+ * are populated (READY/WRITING/PROCESS/PASS/FAIL); lowercase is folded to
+ * uppercase, unsupported characters are skipped. `scale` multiplies each
+ * font pixel.
+ *
+ * Text is rendered rotated 90 deg so it runs along the panel's long axis
+ * (height) rather than its short axis (width), allowing a larger scale —
+ * first character nearest the top of the screen.
+ *
+ * Only foreground pixels are drawn — call this right after
+ * lcd_st7789_fill() so the background shows through unset pixels.
+ */
+esp_err_t lcd_st7789_draw_text_centered(const char *text, uint16_t fg_color, int scale);
