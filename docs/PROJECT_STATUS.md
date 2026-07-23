@@ -20,7 +20,7 @@ sections below are historical continuity records, not active stop conditions.
 ## Session Handoff — 2026-07-23 (MVP declared complete — LED descoped, LCD contrast fix)
 
 **Branch:** `main`
-**Last commit:** `c2c1f3c` — weld_processor: writing-state LCD color yellow->white; descope WS2812 LED
+**Last commit:** `9f4c400` — NOTES: record hardware test for LCD writing-color fix and LED descope
 **Working tree:** CLEAN — everything committed and pushed
 
 ### What was done this session
@@ -49,6 +49,9 @@ sections below are historical continuity records, not active stop conditions.
    user confirmed the white (writing) -> blue (processing) -> green blink (NP result) -> cyan
    sequence displays correctly with better white/green contrast than the old yellow/green.
 9. Committed as `c2c1f3c` and pushed to `origin/main`.
+10. Updated `NOTES.md` with the hardware test result (build/flash/color-cycle verification
+    table) per the CLAUDE.md rule to log completed hardware tests there. Committed as
+    `9f4c400` and pushed.
 
 ### Project stage status
 
@@ -62,7 +65,7 @@ unlocking that scope.
 ### Hardware state
 
 - Board: Waveshare ESP32-S3-LCD-1.47 on SLOT3 of Pi workbench (192.168.1.43)
-- Running: `c2c1f3c` build
+- Running: `c2c1f3c` build (firmware unchanged since; `9f4c400` is docs-only)
 - LCD: CYAN (idle), confirmed cycling correctly through the updated color states
 - Flash method: Key1+Key2 download mode -> Pi SSH esptool; Key2 press required after flash to boot
 
