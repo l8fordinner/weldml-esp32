@@ -245,6 +245,31 @@ intentionally unimplemented — not gaps.
 
 ---
 
+## MVP Feature Addition — Centered Status Text on LCD (2026-07-23)
+
+**Change:** Added `lcd_st7789_draw_text_centered()` (built-in 5x7 bitmap font, uppercase
+A-Z subset needed for status words only) to `components/lcd_st7789/`. Each color-fill
+state in `weld_processor.c` now also draws its label (READY/WRITING/PROCESS/PASS/FAIL)
+in black over the full-screen color. Text is rendered rotated 90° to run along the
+panel's 320px-tall axis instead of its 172px-wide axis, at 7x scale (largest integer
+scale that fits the 7-character labels WRITING/PROCESS within 320px).
+
+**Hardware test (Waveshare ESP32-S3-LCD-1.47, Pi workbench SLOT3, firmware `30591e6`):**
+
+| Test | Result | Notes |
+|------|--------|-------|
+| Build (`idf.py -D BOARD=waveshare-esp32-s3-lcd-147 build`) | PASS | Zero errors/warnings |
+| Flash via Pi SSH esptool (Key1+Key2 download mode, Key2 to boot) | PASS | SHA hash verified |
+| READY label on idle (cyan) screen | PASS — user confirmed | Rotated text renders correctly oriented (not mirrored/upside-down) and legible; user confirmed size/legibility acceptable |
+
+Only the WRITING→PROCESS→PASS/FAIL portion of the cycle was not re-verified visually
+this session (READY/idle state only) — the same `lcd_st7789_draw_text_centered()` call
+path is used for all five states via the `label_map[]`/`set_state()` mechanism and the
+blink loop in `process_sd()`, so it is expected but not independently observed for the
+other four labels.
+
+---
+
 ## Deferred to Product Fork
 
 These items are not part of the base template and do not need to be tested here:

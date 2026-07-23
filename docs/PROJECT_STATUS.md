@@ -17,6 +17,59 @@ sections below are historical continuity records, not active stop conditions.
 
 ---
 
+## Session Handoff — 2026-07-23 (added rotated status text labels on LCD)
+
+**Branch:** `main`
+**Last commit:** `30591e6` — lcd_st7789: add centered status text labels, rotated to use the long axis
+**Working tree:** CLEAN — everything committed and pushed
+
+### What was done this session
+
+1. Following the MVP-complete handoff (below), user asked for a new feature: black text
+   labels ("Ready", "Writing", "Process", "Pass", "Fail") centered over each full-screen
+   LCD color state, big enough to read.
+2. Implemented `lcd_st7789_draw_text_centered()` in `components/lcd_st7789/`:
+   - Built-in 5x7 bitmap font, populated only for the 16 uppercase letters the five
+     labels actually need (A,C,D,E,F,G,I,L,N,O,P,R,S,T,W,Y) — not a full ASCII font.
+   - `weld_processor.c`: added `label_map[]` parallel to the existing `color_map[]` in
+     `set_state()`; also draws "PASS"/"FAIL" during the existing 5x-blink result loop
+     in `process_sd()`.
+3. First pass drew text horizontally at 4x scale (fits the 172px width). User then asked
+   to rotate the letters "the long way" to make them bigger — re-implemented the renderer
+   to rotate the text 90° so it runs along the panel's 320px height instead of its 172px
+   width, allowing 7x scale (largest integer scale fitting the 7-char labels
+   WRITING/PROCESS: `7*(6*7-1)=287 <= 320`). First character renders nearest the top of
+   the screen.
+4. Updated `docs/MVP_REQUIREMENTS.md`: LCD state table now has a "Center label" column;
+   the old "no text required" note is superseded and documents the rotation/7x-scale
+   rationale.
+5. Build: `idf.py -D BOARD=waveshare-esp32-s3-lcd-147 build` — PASS, zero errors/warnings
+   (verified after both the horizontal and the rotated implementation).
+6. Flashed twice via Pi workbench (SLOT3, Key1+Key2 download mode -> SCP to Pi `/tmp/` ->
+   SSH esptool `--before no-reset --after hard-reset --no-stub` -> Key2 to boot) — once
+   for the horizontal version, once for the rotated version.
+7. Hardware-verified: user confirmed the rotated READY label on the idle (cyan) screen
+   renders correctly oriented (not mirrored/upside-down) and is legible at the larger
+   7x scale. The WRITING/PROCESS/PASS/FAIL labels use the identical code path
+   (`label_map[]` + `set_state()`, or the blink loop) but were not independently
+   re-observed this session — see `NOTES.md` for the exact caveat.
+8. Updated `NOTES.md` with the hardware test result (per the CLAUDE.md rule to log
+   completed hardware tests there).
+9. Committed as `30591e6` and pushed to `origin/main`. `NOTES.md` update follows in a
+   separate commit.
+
+### Hardware state
+
+- Board: Waveshare ESP32-S3-LCD-1.47 on SLOT3 of Pi workbench (192.168.1.43)
+- Running: `30591e6` build
+- LCD: CYAN (idle) with vertical "READY" label confirmed legible
+
+### Next-session prompt
+
+Read docs/PROJECT_STATUS.md first.
+
+---
+
 ## Session Handoff — 2026-07-23 (MVP declared complete — LED descoped, LCD contrast fix)
 
 **Branch:** `main`
