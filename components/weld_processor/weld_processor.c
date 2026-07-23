@@ -20,10 +20,11 @@
 
 static const char *TAG = "weld_proc";
 
-#define IDLE_WINDOW_MS  5000
-#define SD_MOUNT        "/sdcard"
-#define RESULT_PATH     SD_MOUNT "/weldml_result.json"
-#define MONITOR_STACK   6144
+#define IDLE_WINDOW_MS   5000
+#define SD_MOUNT         "/sdcard"
+#define RESULT_PATH      SD_MOUNT "/weldml_result.json"
+#define RESULTS_CSV_PATH SD_MOUNT "/weldml_results.csv"
+#define MONITOR_STACK    6144
 
 /*
  * Write-activity tracking.
@@ -143,7 +144,8 @@ static bool find_any_file(char *out_path, size_t path_len, time_t *out_mtime)
 static bool write_result_json(const char *src_path, time_t src_mtime,
                               const fsj_result_t *parsed,
                               const fsj_features_t *features,
-                              const weld_inference_result_t *result)
+                              const weld_inference_result_t *result,
+                              uint32_t parse_ms, uint32_t features_ms)
 {
     FILE *f = fopen(RESULT_PATH, "w");
     if (!f) {
@@ -186,6 +188,10 @@ static bool write_result_json(const char *src_path, time_t src_mtime,
             "\"features\":{"
             "\"MinPositionStage3\":%.9g,"
             "\"FFT_FrequencyBandwidth\":%.9g"
+            "},"
+            "\"timing\":{"
+            "\"parse_ms\":%" PRIu32 ","
+            "\"features_ms\":%" PRIu32
             "}"
             "}\n",
             name, mtime_str,
@@ -201,7 +207,8 @@ static bool write_result_json(const char *src_path, time_t src_mtime,
             parsed->window_count,
             (double)parsed->sample_rate_hz,
             (double)features->values[FSJ_FEATURE_MIN_POSITION_STAGE3],
-            (double)features->values[FSJ_FEATURE_FFT_FREQUENCY_BANDWIDTH]);
+            (double)features->values[FSJ_FEATURE_FFT_FREQUENCY_BANDWIDTH],
+            parse_ms, features_ms);
     bool ok = (wr > 0) && (fflush(f) == 0);
     if (!ok) {
         ESP_LOGE(TAG, "write to %s failed errno=%d", RESULT_PATH, errno);
@@ -214,6 +221,36 @@ static bool write_result_json(const char *src_path, time_t src_mtime,
         ESP_LOGI(TAG, "Inference: %s -> %s (%s %.3f)",
                  src_path, RESULT_PATH, result->label,
                  (double)result->probability_class1);
+
+        bool need_header = false;
+        struct stat csv_st;
+        if (stat(RESULTS_CSV_PATH, &csv_st) != 0) {
+            need_header = true;
+        }
+        FILE *csv = fopen(RESULTS_CSV_PATH, "a");
+        if (csv) {
+            if (need_header) {
+                fprintf(csv, "uptime_ms,source_filename,status,predicted_class,label,"
+                             "probability_class1,MinPositionStage3,FFT_FrequencyBandwidth,"
+                             "window_start_row,window_end_row,window_count,"
+                             "parse_ms,features_ms\n");
+            }
+            fprintf(csv,
+                    "%" PRIu32 ",%s,ok,%d,%s,%.6f,%.9g,%.9g,%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 "\n",
+                    (uint32_t)(esp_timer_get_time() / 1000ULL),
+                    name,
+                    result->predicted_class,
+                    result->label,
+                    (double)result->probability_class1,
+                    (double)features->values[FSJ_FEATURE_MIN_POSITION_STAGE3],
+                    (double)features->values[FSJ_FEATURE_FFT_FREQUENCY_BANDWIDTH],
+                    parsed->window_start_row,
+                    parsed->window_end_row,
+                    parsed->window_count,
+                    parse_ms, features_ms);
+            fflush(csv);
+            fclose(csv);
+        }
     }
     return ok;
 }
@@ -259,37 +296,70 @@ static bool write_error_json(const char *src_path, time_t src_mtime,
         ESP_LOGE(TAG, "fclose(%s) failed errno=%d", RESULT_PATH, errno);
         ok = false;
     }
+
+    bool need_header = false;
+    struct stat csv_st;
+    if (stat(RESULTS_CSV_PATH, &csv_st) != 0) {
+        need_header = true;
+    }
+    FILE *csv = fopen(RESULTS_CSV_PATH, "a");
+    if (csv) {
+        if (need_header) {
+            fprintf(csv, "uptime_ms,source_filename,status,predicted_class,label,"
+                         "probability_class1,MinPositionStage3,FFT_FrequencyBandwidth,"
+                         "window_start_row,window_end_row,window_count\n");
+        }
+        fprintf(csv, "%" PRIu32 ",%s,%s,,,,,,,\n",
+                (uint32_t)(esp_timer_get_time() / 1000ULL),
+                name ? name : "",
+                status);
+        fflush(csv);
+        fclose(csv);
+    }
     return ok;
 }
 
-static bool process_fsj_file(const char *src_path, time_t src_mtime)
+/* Returns predicted class (WELD_INFERENCE_CLASS_NP/IF) or -1 on error. */
+static int process_fsj_file(const char *src_path, time_t src_mtime)
 {
+    uint32_t t0, t1, t2;
+    t0 = (uint32_t)(esp_timer_get_time() / 1000ULL);
+
     fsj_result_t parsed;
     fsj_status_t st = fsj_parse_file(src_path, &parsed);
     if (st != FSJ_OK) {
         ESP_LOGE(TAG, "Parse failed for %s: %s (%s)",
                  src_path, fsj_status_str(st), parsed.error_msg);
-        return write_error_json(src_path, src_mtime, fsj_status_str(st), parsed.error_msg);
+        write_error_json(src_path, src_mtime, fsj_status_str(st), parsed.error_msg);
+        return -1;
     }
+    t1 = (uint32_t)(esp_timer_get_time() / 1000ULL);
 
     fsj_features_t features;
     st = fsj_extract_features(&parsed, &features);
     if (st != FSJ_OK) {
         ESP_LOGE(TAG, "Feature extraction failed for %s: %s", src_path, fsj_status_str(st));
         fsj_result_free(&parsed);
-        return write_error_json(src_path, src_mtime, fsj_status_str(st), "feature extraction failed");
+        write_error_json(src_path, src_mtime, fsj_status_str(st), "feature extraction failed");
+        return -1;
     }
+    t2 = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    uint32_t parse_ms = t1 - t0;
+    uint32_t features_ms = t2 - t1;
+    ESP_LOGI(TAG, "timing: parse=%lu ms features=%lu ms", (unsigned long)parse_ms, (unsigned long)features_ms);
 
     weld_inference_result_t result;
     if (!weld_inference_predict(&features, &result)) {
         ESP_LOGE(TAG, "Inference failed for %s", src_path);
         fsj_result_free(&parsed);
-        return write_error_json(src_path, src_mtime, "inference_failed", "tree inference failed");
+        write_error_json(src_path, src_mtime, "inference_failed", "tree inference failed");
+        return -1;
     }
 
-    bool ok = write_result_json(src_path, src_mtime, &parsed, &features, &result);
+    bool ok = write_result_json(src_path, src_mtime, &parsed, &features, &result, parse_ms, features_ms);
+    int predicted = result.predicted_class;
     fsj_result_free(&parsed);
-    return ok;
+    return ok ? predicted : -1;
 }
 
 static void process_sd(void)
@@ -306,6 +376,8 @@ static void process_sd(void)
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "FatFS mount failed: %s", esp_err_to_name(err));
         set_state(WELD_STATE_FAILURE);
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        set_state(WELD_STATE_WAITING);
         return;  /* mount failed — nothing to unmount */
     }
 
@@ -316,19 +388,28 @@ static void process_sd(void)
         found = find_any_file(src_path, sizeof(src_path), &src_mtime);
     }
 
-    bool write_ok;
+    int prediction;
     if (found) {
         ESP_LOGI(TAG, "Newest file: %s (mtime=%lld)", src_path, (long long)src_mtime);
-        write_ok = process_fsj_file(src_path, src_mtime);
+        prediction = process_fsj_file(src_path, src_mtime);
     } else {
         ESP_LOGW(TAG, "No files on SD card");
-        write_ok = write_error_json(NULL, 0, "no_files", "no weld file found");
+        write_error_json(NULL, 0, "no_files", "no weld file found");
+        prediction = -1;
     }
 
     /* Always unmount: returns MSC control to host on both success and failure. */
     tinyusb_msc_storage_unmount();
 
-    set_state(write_ok ? WELD_STATE_SUCCESS : WELD_STATE_FAILURE);
+    /* Blink result 5× at 1 Hz: dark green = PASS (NP), RED = FAIL (IF) or error. */
+    bool pass = (prediction == WELD_INFERENCE_CLASS_NP);
+    for (int i = 0; i < 5; i++) {
+        lcd_st7789_fill(pass ? LCD_COLOR_GREEN : LCD_COLOR_RED);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        lcd_st7789_fill(LCD_COLOR_BLACK);
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    set_state(WELD_STATE_WAITING);
 }
 
 static void monitor_task(void *arg)

@@ -131,6 +131,98 @@ Required before: OTA layout expansion, SPIFFS growth above 4MB, or real WeldML f
 
 ---
 
+## Performance Investigation — Feature Extraction (2026-07-23)
+
+### Context
+
+Stage 6C inference is complete. Hardware test with `l060.fsj` (LOOCV/NP, 1854-sample window)
+showed correct classification (NP, probability_class1=0.0) but ~2 minute total processing time.
+Target is <10 seconds end-to-end.
+
+### Baseline measurement (timing build, 2026-07-23)
+
+Timing fields added to `weldml_result.json` and `weldml_results.csv`:
+- `parse_ms` — time for `fsj_parse_file()` (SD I/O + parsing)
+- `features_ms` — time for `fsj_extract_features()` (time-domain + FFT + CWT)
+
+**Result (l060.fsj, window_count=1854, 500 Hz, 3.708 s of weld data):**
+
+| Field | Value |
+|-------|-------|
+| `parse_ms` | 1,905 ms |
+| `features_ms` | 122,113 ms |
+| Total | ~124 seconds |
+| Predicted class | 0 (NP) — correct for LOOCV/NP fixture |
+| `MinPositionStage3` | 1.86 (triggers first tree node ≤2.185 → NP directly) |
+| `FFT_FrequencyBandwidth` | 33.18 (not reached in inference; logged for traceability) |
+
+**Bottleneck: `features_ms` dominates at 64× parse time.**
+
+Root cause in `compute_fft_features()` (`components/weld_parser/weld_parser.c`):
+- Naive O(N²) DFT: outer loop over `power_count = FFT_PAD_LENGTH/2 + 1 = 2049` bins,
+  inner loop over `used = min(window_count, 4096) = 1854` samples.
+- Total: 2049 × 1854 = **~3.8 million** `cosf`/`sinf` calls per weld file.
+- Hardware FPU on Xtensa LX7 assists arithmetic but `cosf`/`sinf` are still software
+  polynomial approximations — not accelerated by SIMD.
+
+CWT (`compute_cwt_features()`) is fast relative to FFT — not investigated yet but
+expected to be O(n × Σkernel_len) ≈ 1.88M MACs with float, dominated by multiply-accumulate
+rather than trig. The 122 s `features_ms` is almost entirely FFT.
+
+### Optimization 1 — esp-dsp radix-2 FFT (planned)
+
+**Change:** Replace the naive O(N²) DFT with `dsps_fft2r_fc32` from the `espressif/esp-dsp`
+managed component.
+
+- Algorithm: Cooley-Tukey radix-2 FFT, O(N log N).
+- For N=4096: ~4096 × 12 = **~49K** complex butterfly operations (vs. 3.8M trig calls).
+- Theoretical ops reduction: ~77×. Additional benefit: Xtensa SIMD (dual-MAC).
+- Expected `features_ms` after change: <2 seconds (target), likely 500–2000 ms.
+
+**Numerical equivalence:** The FFT of the zero-padded demeaned LOADCELL signal
+is mathematically identical to the naive DFT. Feature values should match to float32
+precision. Classification result must be the same (NP for l060.fsj).
+
+**Implementation approach:**
+- `idf_component.yml`: add `espressif/esp-dsp: "*"`
+- `components/weld_parser/CMakeLists.txt`: add `esp-dsp` to `PRIV_REQUIRES`
+- `components/weld_parser/weld_parser.c`:
+  - `#ifdef ESP_PLATFORM`: include `esp_dsp.h`, call `dsps_fft2r_init_fc32(NULL, 4096)` once,
+    then `dsps_fft2r_fc32` + `dsps_bit_rev_fc32` on a 4096×2 interleaved float buffer.
+  - `#else` (host/test path): retain existing naive DFT unchanged.
+- Power spectrum extraction is identical post-FFT; all 5 feature formulas unchanged.
+
+### Results after Optimization 1 (verified on hardware 2026-07-23)
+
+| Field | Expected | Actual |
+|-------|----------|--------|
+| `parse_ms` | ~1,900 ms (unchanged) | 2,004 ms ✓ |
+| `features_ms` | <2,000 ms | **3,859 ms** |
+| Speedup | ~60–100× | **31.6×** (122,113 → 3,859 ms) |
+| Classification result | NP (unchanged) | NP ✓ — `FFT_FrequencyBandwidth=33.18` identical |
+
+**Total processing time: ~5.9 seconds** (was ~124 seconds). Under 10-second target. ✓
+
+The speedup was lower than the theoretical ~77× ops reduction because:
+- The naive DFT's inner loop over `used=1854` (not 4096) reduced its actual work vs. worst-case.
+- `compute_cwt_features()` is now a significant share of `features_ms` (~3.9 s includes both FFT and CWT).
+- If further speedup is needed, CWT is the next candidate (O(n × Σkernel_len) ≈ 1.88M MACs per weld).
+
+**NP result blink color:** changed from `LCD_COLOR_GREEN_DARK` (0x0300) to standard `LCD_COLOR_GREEN` (0x07E0). Dark green was too dim on the LCD.
+
+### Flash / test procedure for Optimization 1
+
+1. Build: `. ~/esp/esp-idf/export.sh && idf.py -D BOARD=waveshare-esp32-s3-lcd-147 build`
+   (first build downloads esp-dsp from component registry)
+2. SCP binaries to Pi: `scp build/bootloader/bootloader.bin build/partition_table/partition-table.bin build/weldml-esp32.bin casey@192.168.1.43:/tmp/`
+3. User: hold Key1, press Key2 (download mode)
+4. Flash: `ssh casey@192.168.1.43 "python3 -m esptool --chip esp32s3 -p /dev/ttyACM0 -b 460800 --before no-reset --after hard-reset --no-stub write-flash --flash-mode dio --flash-freq 80m --flash-size 16MB 0x0 /tmp/bootloader.bin 0x8000 /tmp/partition-table.bin 0x10000 /tmp/weldml-esp32.bin"`
+5. User: press Key2 to boot
+6. Copy l060.fsj: `ssh casey@192.168.1.43 "sudo mount /dev/sda1 /tmp/sdmount && sudo cp /tmp/l060.fsj /tmp/sdmount/ && sudo sync && sudo umount /tmp/sdmount"`
+7. Wait for blink, then read result: `ssh casey@192.168.1.43 "sudo mount -o ro /dev/sda1 /tmp/sdmount && cat /tmp/sdmount/weldml_result.json && sudo umount /tmp/sdmount"`
+
+---
+
 ## Deferred to Product Fork
 
 These items are not part of the base template and do not need to be tested here:

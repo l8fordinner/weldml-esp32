@@ -4,3 +4,4 @@
 dependencies:
   idf: ">=5.0"
   espressif/esp_tinyusb: "^1.4.2"
+  espressif/esp-dsp: "*"

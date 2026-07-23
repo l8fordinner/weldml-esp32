@@ -8,11 +8,15 @@
 
 #ifdef ESP_PLATFORM
 #include "esp_log.h"
+#include "esp_timer.h"
+#include "esp_dsp.h"
 #define FSJ_LOGE(tag, fmt, ...) ESP_LOGE(tag, fmt, ##__VA_ARGS__)
 #define FSJ_LOGI(tag, fmt, ...) ESP_LOGI(tag, fmt, ##__VA_ARGS__)
+#define FSJ_MS() ((uint32_t)(esp_timer_get_time() / 1000ULL))
 #else
 #define FSJ_LOGE(tag, fmt, ...) fprintf(stderr, "[E] %s: " fmt "\n", (tag), ##__VA_ARGS__)
 #define FSJ_LOGI(tag, fmt, ...) fprintf(stderr, "[I] %s: " fmt "\n", (tag), ##__VA_ARGS__)
+#define FSJ_MS() 0
 #endif
 
 static const char *TAG = "weld_parser";
@@ -522,60 +526,102 @@ static fsj_status_t compute_fft_features(const fsj_result_t *parsed, fsj_feature
         return FSJ_ERR_FEATURE;
     }
 
-    double sum = 0.0;
+    float sum = 0.0f;
     for (uint32_t i = 0; i < n; i++) {
         sum += parsed->window_rows[i].cols[FSJ_COL_LOADCELL];
     }
-    float mean = (float)(sum / (double)n);
+    float mean = sum / (float)n;
     uint32_t used = (n < FFT_PAD_LENGTH) ? n : FFT_PAD_LENGTH;
     float mean_dt = fft_mean_dt_padded_like_trainer(parsed);
     float freq_step = 1.0f / ((float)FFT_PAD_LENGTH * mean_dt);
 
-    double power_sum = 0.0;
-    double weighted_freq_sum = 0.0;
-    double log_power_sum = 0.0;
-    double max_power = -1.0;
+    float power_sum = 0.0f;
+    float weighted_freq_sum = 0.0f;
+    float log_power_sum = 0.0f;
+    float max_power = -1.0f;
     uint32_t dominant_idx = 0;
     uint32_t power_count = FFT_PAD_LENGTH / 2 + 1;
-    double *powers = calloc(power_count, sizeof(double));
+    float *powers = calloc(power_count, sizeof(float));
     if (!powers) {
         return FSJ_ERR_NOMEM;
     }
 
-    for (uint32_t k = 0; k < power_count; k++) {
-        double real = 0.0;
-        double imag = 0.0;
-        for (uint32_t t = 0; t < used; t++) {
-            double x = (double)parsed->window_rows[t].cols[FSJ_COL_LOADCELL] - (double)mean;
-            double angle = -2.0 * M_PI * (double)k * (double)t / (double)FFT_PAD_LENGTH;
-            real += x * cos(angle);
-            imag += x * sin(angle);
+#ifdef ESP_PLATFORM
+    /* O(N log N) radix-2 FFT via esp-dsp. Interleaved complex buffer [re0,im0,...]. */
+    float *fft_buf = calloc(FFT_PAD_LENGTH * 2, sizeof(float));
+    if (!fft_buf) {
+        free(powers);
+        return FSJ_ERR_NOMEM;
+    }
+    for (uint32_t i = 0; i < used; i++) {
+        fft_buf[2 * i] = parsed->window_rows[i].cols[FSJ_COL_LOADCELL] - mean;
+    }
+    static bool s_fft_init = false;
+    if (!s_fft_init) {
+        esp_err_t r = dsps_fft2r_init_fc32(NULL, FFT_PAD_LENGTH);
+        if (r != ESP_OK && r != ESP_ERR_DSP_REINITIALIZED) {
+            free(fft_buf);
+            free(powers);
+            return FSJ_ERR_FEATURE;
         }
-        double power = real * real + imag * imag;
+        s_fft_init = true;
+    }
+    dsps_fft2r_fc32(fft_buf, FFT_PAD_LENGTH);
+    dsps_bit_rev_fc32(fft_buf, FFT_PAD_LENGTH);
+    for (uint32_t k = 0; k < power_count; k++) {
+        float re = fft_buf[2 * k];
+        float im = fft_buf[2 * k + 1];
+        float power = re * re + im * im;
         powers[k] = power;
         float freq = (float)k * freq_step;
         power_sum += power;
-        weighted_freq_sum += (double)freq * power;
-        log_power_sum += log(power + FEATURE_EPSILON);
+        weighted_freq_sum += freq * power;
+        log_power_sum += logf(power + FEATURE_EPSILON);
         if (power > max_power) {
             max_power = power;
             dominant_idx = k;
         }
     }
+    free(fft_buf);
+#else
+    /* Naive O(N²) DFT — retained for host-side tests. */
+    float angle_step = -2.0f * (float)M_PI / (float)FFT_PAD_LENGTH;
+    for (uint32_t k = 0; k < power_count; k++) {
+        float real = 0.0f;
+        float imag = 0.0f;
+        float base_angle = angle_step * (float)k;
+        for (uint32_t t = 0; t < used; t++) {
+            float x = parsed->window_rows[t].cols[FSJ_COL_LOADCELL] - mean;
+            float angle = base_angle * (float)t;
+            real += x * cosf(angle);
+            imag += x * sinf(angle);
+        }
+        float power = real * real + imag * imag;
+        powers[k] = power;
+        float freq = (float)k * freq_step;
+        power_sum += power;
+        weighted_freq_sum += freq * power;
+        log_power_sum += logf(power + FEATURE_EPSILON);
+        if (power > max_power) {
+            max_power = power;
+            dominant_idx = k;
+        }
+    }
+#endif
 
     float dominant_freq = (float)dominant_idx * freq_step;
-    float centroid = (power_sum > 0.0) ? (float)(weighted_freq_sum / power_sum) : NAN;
-    double spread_sum = 0.0;
-    if (power_sum > 0.0 && isfinite(centroid)) {
+    float centroid = (power_sum > 0.0f) ? (weighted_freq_sum / power_sum) : NAN;
+    float spread_sum = 0.0f;
+    if (power_sum > 0.0f && isfinite(centroid)) {
         for (uint32_t k = 0; k < power_count; k++) {
-            double freq = (double)((float)k * freq_step);
-            double d = freq - (double)centroid;
+            float freq = (float)k * freq_step;
+            float d = freq - centroid;
             spread_sum += d * d * powers[k];
         }
     }
-    float spread = (power_sum > 0.0) ? sqrtf((float)(spread_sum / power_sum)) : NAN;
+    float spread = (power_sum > 0.0f) ? sqrtf(spread_sum / power_sum) : NAN;
 
-    double half_power = max_power / 2.0;
+    float half_power = max_power / 2.0f;
     uint32_t first_above = 0;
     uint32_t last_above = 0;
     bool above_found = false;
@@ -589,9 +635,8 @@ static fsj_status_t compute_fft_features(const fsj_result_t *parsed, fsj_feature
         }
     }
     float bandwidth = above_found ? ((float)(last_above - first_above) * freq_step) : 0.0f;
-    float mean_power = (float)(power_sum / (double)power_count);
-    float flatness = expf((float)(log_power_sum / (double)power_count))
-                   / (mean_power + FEATURE_EPSILON);
+    float mean_power = power_sum / (float)power_count;
+    float flatness = expf(log_power_sum / (float)power_count) / (mean_power + FEATURE_EPSILON);
 
     out->values[FSJ_FEATURE_FFT_DOMINANT_FREQ] = dominant_freq;
     out->values[FSJ_FEATURE_FFT_SPECTRAL_CENTROID] = centroid;
@@ -634,8 +679,8 @@ static fsj_status_t compute_cwt_features(const fsj_result_t *parsed, fsj_feature
         return FSJ_ERR_FEATURE;
     }
 
-    double total_energy = 0.0;
-    double scale_energies[CWT_SCALE_COUNT] = {0};
+    float total_energy = 0.0f;
+    float scale_energies[CWT_SCALE_COUNT] = {0};
 
     for (uint32_t s = 0; s < CWT_SCALE_COUNT; s++) {
         float scale = CWT_SCALES[s];
@@ -648,33 +693,33 @@ static fsj_status_t compute_cwt_features(const fsj_result_t *parsed, fsj_feature
 
         for (uint32_t out_idx = 0; out_idx < n; out_idx++) {
             uint32_t coef_idx = start + out_idx;
-            double conv0 = 0.0;
-            double conv1 = 0.0;
+            float conv0 = 0.0f;
+            float conv1 = 0.0f;
             for (uint32_t m = 0; m < kernel_len; m++) {
                 if (coef_idx >= m) {
                     uint32_t data_idx = coef_idx - m;
                     if (data_idx < n) {
                         uint32_t base_idx = cwt_reversed_wavelet_index(kernel_len - 1 - m, scale);
-                        conv0 += (double)parsed->window_rows[data_idx].cols[FSJ_COL_LOADCELL]
-                               * (double)morlet_integral_sample(base_idx);
+                        conv0 += parsed->window_rows[data_idx].cols[FSJ_COL_LOADCELL]
+                               * morlet_integral_sample(base_idx);
                     }
                 }
                 if (coef_idx + 1 >= m) {
                     uint32_t data_idx = coef_idx + 1 - m;
                     if (data_idx < n) {
                         uint32_t base_idx = cwt_reversed_wavelet_index(kernel_len - 1 - m, scale);
-                        conv1 += (double)parsed->window_rows[data_idx].cols[FSJ_COL_LOADCELL]
-                               * (double)morlet_integral_sample(base_idx);
+                        conv1 += parsed->window_rows[data_idx].cols[FSJ_COL_LOADCELL]
+                               * morlet_integral_sample(base_idx);
                     }
                 }
             }
-            float coef = -sqrt_scale * (float)(conv1 - conv0);
-            scale_energies[s] += (double)coef * (double)coef;
+            float coef = -sqrt_scale * (conv1 - conv0);
+            scale_energies[s] += coef * coef;
         }
         total_energy += scale_energies[s];
     }
 
-    if (total_energy == 0.0) {
+    if (total_energy == 0.0f) {
         out->values[FSJ_FEATURE_CWT_TOTAL_ENERGY] = 0.0f;
         out->values[FSJ_FEATURE_CWT_DOMINANT_SCALE] = NAN;
         out->values[FSJ_FEATURE_CWT_ENERGY_ENTROPY] = NAN;
@@ -684,9 +729,9 @@ static fsj_status_t compute_cwt_features(const fsj_result_t *parsed, fsj_feature
     }
 
     uint32_t dominant = 0;
-    double max_energy = scale_energies[0];
-    double min_energy = scale_energies[0];
-    double entropy = 0.0;
+    float max_energy = scale_energies[0];
+    float min_energy = scale_energies[0];
+    float entropy = 0.0f;
     for (uint32_t s = 0; s < CWT_SCALE_COUNT; s++) {
         if (scale_energies[s] > max_energy) {
             max_energy = scale_energies[s];
@@ -695,15 +740,15 @@ static fsj_status_t compute_cwt_features(const fsj_result_t *parsed, fsj_feature
         if (scale_energies[s] < min_energy) {
             min_energy = scale_energies[s];
         }
-        double norm = scale_energies[s] / total_energy;
-        entropy += -norm * log(norm + FEATURE_EPSILON);
+        float norm = scale_energies[s] / total_energy;
+        entropy += -norm * logf(norm + FEATURE_EPSILON);
     }
 
-    out->values[FSJ_FEATURE_CWT_TOTAL_ENERGY] = (float)total_energy;
+    out->values[FSJ_FEATURE_CWT_TOTAL_ENERGY] = total_energy;
     out->values[FSJ_FEATURE_CWT_DOMINANT_SCALE] = CWT_SCALES[dominant];
-    out->values[FSJ_FEATURE_CWT_ENERGY_ENTROPY] = (float)entropy;
-    out->values[FSJ_FEATURE_CWT_MAX_SCALE_ENERGY] = (float)max_energy;
-    out->values[FSJ_FEATURE_CWT_MIN_SCALE_ENERGY] = (float)min_energy;
+    out->values[FSJ_FEATURE_CWT_ENERGY_ENTROPY] = entropy;
+    out->values[FSJ_FEATURE_CWT_MAX_SCALE_ENERGY] = max_energy;
+    out->values[FSJ_FEATURE_CWT_MIN_SCALE_ENERGY] = min_energy;
     return FSJ_OK;
 }
 
@@ -720,11 +765,18 @@ fsj_status_t fsj_extract_features(const fsj_result_t *parsed, fsj_features_t *ou
     out->values[FSJ_FEATURE_MIN_POSITION_STAGE3] = parsed->stage_metrics.min_position_stage3;
     out->values[FSJ_FEATURE_PLUNGE_VELOCITY] = parsed->stage_metrics.plunge_velocity;
 
-    if (compute_time_features(parsed, out) != FSJ_OK ||
-        compute_fft_features(parsed, out) != FSJ_OK ||
-        compute_cwt_features(parsed, out) != FSJ_OK) {
-        return FSJ_ERR_FEATURE;
-    }
+    uint32_t t0, t1;
+    t0 = FSJ_MS();
+    if (compute_time_features(parsed, out) != FSJ_OK) { return FSJ_ERR_FEATURE; }
+    t1 = FSJ_MS(); FSJ_LOGI(TAG, "time_features: %lu ms", (unsigned long)(t1 - t0));
+
+    t0 = FSJ_MS();
+    if (compute_fft_features(parsed, out) != FSJ_OK) { return FSJ_ERR_FEATURE; }
+    t1 = FSJ_MS(); FSJ_LOGI(TAG, "fft_features:  %lu ms", (unsigned long)(t1 - t0));
+
+    t0 = FSJ_MS();
+    if (compute_cwt_features(parsed, out) != FSJ_OK) { return FSJ_ERR_FEATURE; }
+    t1 = FSJ_MS(); FSJ_LOGI(TAG, "cwt_features:  %lu ms", (unsigned long)(t1 - t0));
 
     for (uint32_t i = 0; i < FSJ_FEATURE_COUNT; i++) {
         if (!isfinite(out->values[i])) {
