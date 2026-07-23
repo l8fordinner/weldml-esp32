@@ -17,6 +17,55 @@ sections below are historical continuity records, not active stop conditions.
 
 ---
 
+## Session Handoff — 2026-07-23 (Stage 6 complete; all phases hardware-verified)
+
+**Branch:** `main`
+**Last commit:** `ce0cb7c` — weld_parser: replace naive O(N²) DFT with esp-dsp O(N log N) FFT
+**Working tree:** CLEAN — everything committed and pushed
+
+### What was done this session
+
+1. Flashed timing build (from prior handoff), ran l060.fsj — revealed FFT as the bottleneck:
+   - `parse_ms`: 1,905 ms; `features_ms`: 122,113 ms (~2 minutes total)
+   - Root cause: naive O(N²) DFT in `compute_fft_features()` — 2049 bins × 1854 samples = 3.8M trig calls
+2. Documented full performance baseline in `NOTES.md` (Performance Investigation section).
+3. Replaced naive DFT with `dsps_fft2r_fc32` from `espressif/esp-dsp` (v1.8.2):
+   - `#ifdef ESP_PLATFORM` guard — naive DFT retained for host-side tests
+   - Added `espressif/esp-dsp: "*"` to `main/idf_component.yml` and `idf_component.yml`
+   - `features_ms`: 122,113 → 3,859 ms (**31.6× speedup**); total cycle ~6 s ✓
+   - Classification result unchanged: l060.fsj → NP, `FFT_FrequencyBandwidth=33.18`
+4. Changed NP result blink from `LCD_COLOR_GREEN_DARK` (0x0300, too dim) to `LCD_COLOR_GREEN` (0x07E0).
+5. Verified both in-distribution fixtures on hardware:
+   - `l060.fsj` (LOOCV/NP): predicted_class=0 (NP), green blink ✓, features_ms=3,859 ms
+   - `l046.fsj` (LOOCV/IF): predicted_class=1 (IF), red blink ✓, features_ms=2,068 ms
+
+### Hardware state
+
+- Board: Waveshare ESP32-S3-LCD-1.47 on SLOT3 of Pi workbench (192.168.1.43)
+- Running: `ce0cb7c` build
+- LCD: CYAN (idle)
+- Flash method: Key1+Key2 download mode → Pi SSH esptool; Key2 press required after flash to boot
+- l060.fsj and l046.fsj both at `/tmp/` on Pi
+
+### Project stage status
+
+| Stage | Status |
+|-------|--------|
+| Stage 5 — SD detect + JSON write | COMPLETE |
+| Stage 6A — FSJ parser | COMPLETE |
+| Stage 6B — Feature extraction | COMPLETE |
+| Stage 6C — Inference (Coarse Tree) | COMPLETE, hardware-verified |
+| Stage 6D — CSV logging + timing | COMPLETE, hardware-verified |
+| Performance — esp-dsp FFT | COMPLETE, 31.6× speedup, ~6 s total |
+
+All MVP Stage 6 firmware work is complete. Check `docs/MVP_REQUIREMENTS.md` for any remaining scope.
+
+### Next-session prompt
+
+Read docs/PROJECT_STATUS.md first.
+
+---
+
 ## Session Handoff — 2026-07-23 (performance investigation; timing build ready to flash)
 
 **Branch:** `main`
