@@ -17,6 +17,61 @@ sections below are historical continuity records, not active stop conditions.
 
 ---
 
+## Session Handoff — 2026-07-23 (MVP declared complete — LED descoped, LCD contrast fix)
+
+**Branch:** `main`
+**Last commit:** `c2c1f3c` — weld_processor: writing-state LCD color yellow->white; descope WS2812 LED
+**Working tree:** CLEAN — everything committed and pushed
+
+### What was done this session
+
+1. Read `docs/PROJECT_STATUS.md` and `docs/MVP_REQUIREMENTS.md` to check remaining MVP scope
+   against the completed Stage 6 work (all Q1-Q10 resolved, Stage 5/6A-6D hardware-verified).
+2. Found one real gap against MVP_REQUIREMENTS.md: the WS2812B RGB LED (GPIO38) is wired and
+   documented in `board.h` but was never driven by any firmware code — grepped `main/` and
+   `components/` for `ws2812`/`neopixel`/`led_strip` with zero hits outside the pin comment.
+3. User decision: descope the LED for this MVP pass (not implement it).
+4. User also asked to change the WRITING-state LCD color from yellow to white for stronger
+   contrast against the GREEN result blink.
+5. Changes made:
+   - `components/weld_processor/weld_processor.c`: `WELD_STATE_WRITING` color map entry
+     changed `LCD_COLOR_YELLOW` -> `LCD_COLOR_WHITE`.
+   - `docs/MVP_REQUIREMENTS.md`: "Output — Secondary: RGB LED" section rewritten to state the
+     LED is descoped for MVP (LCD is the sole status output); added a line to the "Out of Scope
+     for MVP" list; updated the LCD color table from the original 3-state sketch (processing/
+     BAD/GOOD) to the actual 5-state machine (waiting=cyan, writing=white, processing=blue,
+     success=green, failure=red) to match what's really implemented.
+6. Build: `idf.py -D BOARD=waveshare-esp32-s3-lcd-147 build` — PASS, zero errors/warnings.
+7. Flashed via Pi workbench (SLOT3, manual Key1+Key2 download mode -> SCP binaries to
+   `/tmp/` on Pi -> SSH esptool `--before no-reset --after hard-reset --no-stub` -> user
+   pressed Key2 to boot).
+8. Hardware-verified: copied `l060.fsj` to the SD card via Pi SSH mount/cp/sync/umount twice;
+   user confirmed the white (writing) -> blue (processing) -> green blink (NP result) -> cyan
+   sequence displays correctly with better white/green contrast than the old yellow/green.
+9. Committed as `c2c1f3c` and pushed to `origin/main`.
+
+### Project stage status
+
+All MVP Stage 6 firmware work plus this session's LCD contrast fix and LED descope are
+complete and hardware-verified. **User has declared MVP complete.** Per `MVP_REQUIREMENTS.md`,
+out-of-scope items (OTA, MQTT, WiFi, web server, BLE, multi-file batch, weld result history/
+logging beyond the Stage 6D CSV, USB MSC passthrough as a separate mode, and now the WS2812B
+LED) remain unimplemented by design — do not implement any of them without the user explicitly
+unlocking that scope.
+
+### Hardware state
+
+- Board: Waveshare ESP32-S3-LCD-1.47 on SLOT3 of Pi workbench (192.168.1.43)
+- Running: `c2c1f3c` build
+- LCD: CYAN (idle), confirmed cycling correctly through the updated color states
+- Flash method: Key1+Key2 download mode -> Pi SSH esptool; Key2 press required after flash to boot
+
+### Next-session prompt
+
+Read docs/PROJECT_STATUS.md first.
+
+---
+
 ## Session Handoff — 2026-07-23 (Stage 6 complete; all phases hardware-verified)
 
 **Branch:** `main`
