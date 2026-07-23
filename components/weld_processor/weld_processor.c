@@ -53,7 +53,7 @@ static void set_state(weld_state_t state)
 {
     static const uint16_t color_map[] = {
         [WELD_STATE_WAITING]    = LCD_COLOR_CYAN,
-        [WELD_STATE_WRITING]    = LCD_COLOR_YELLOW,
+        [WELD_STATE_WRITING]    = LCD_COLOR_WHITE,
         [WELD_STATE_PROCESSING] = LCD_COLOR_BLUE,
         [WELD_STATE_SUCCESS]    = LCD_COLOR_GREEN,
         [WELD_STATE_FAILURE]    = LCD_COLOR_RED,

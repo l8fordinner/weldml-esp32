@@ -120,9 +120,11 @@ from across the room.
 
 | State | Screen |
 |-------|--------|
-| Processing / busy | White (full screen) |
-| Result: BAD (IF) | Red (full screen) |
+| Waiting (idle, USB MSC ready) | Cyan (full screen) |
+| Host writing (SCSI WRITE10 active) | White (full screen) |
+| Processing (ESP reading/parsing SD) | Blue (full screen) |
 | Result: GOOD (NP) | Green (full screen) |
+| Result: BAD (IF) / error | Red (full screen) |
 
 Full-screen color fills are sufficient. No text, icons, or progress bars are required
 for the MVP. The color must be unambiguous at room distance.
@@ -136,16 +138,10 @@ LCD hardware interface:
 
 ## Output — Secondary: RGB LED
 
-The WS2812B RGB LED on GPIO38 provides secondary status, visible up close.
-
-| State | LED |
-|-------|-----|
-| Processing | White blink (matches SmrtUsbEsp convention) |
-| BAD | Red |
-| GOOD | Green |
-
-The LED is a supplement to the screen, not a replacement. Screen color is the
-authoritative signal for the MVP.
+**Descoped for MVP (2026-07-23).** The WS2812B RGB LED on GPIO38 is wired and
+documented in `board.h` but is not driven by firmware. The LCD is the sole
+status output for this MVP pass. Driving GPIO38 is deferred to a later
+milestone; see "Out of Scope for MVP" below.
 
 ---
 
@@ -161,6 +157,7 @@ These features are **desired for later milestones** but explicitly excluded from
 - Multi-file batch processing
 - Weld result history / logging to SD
 - USB Mass Storage passthrough (SmrtUsbEsp mode can remain in a separate branch)
+- WS2812B RGB LED (GPIO38) status indication — LCD is the sole status output for MVP
 
 ---
 
