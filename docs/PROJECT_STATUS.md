@@ -32,6 +32,250 @@ not MVP completion. See the handoff below for the final verification session.
 
 ---
 
+## Session Handoff — 2026-08-06 (Milestone 3 spec'd; Milestone 2 broken into tickets; weld_cloud TDD started; Clear-button behavior reopened, unresolved)
+
+**Branch:** `main`
+**Last commit:** `50c91c2` — weld_cloud: add host-tested ThingsBoard payload-builder component
+**Working tree:** DIRTY
+
+| File | State |
+|---|---|
+| `components/weld_cloud/weld_cloud.h` | Modified (uncommitted) — added `weld_cloud_select_fsj_for_deletion()` declaration on top of committed `weld_cloud_parse_timestamp()`/`weld_cloud_build_payload()` |
+| `components/weld_cloud/weld_cloud.c` | Modified (uncommitted) — implemented `weld_cloud_select_fsj_for_deletion()` |
+| `tests/host/test_weld_cloud.c` | Modified (uncommitted) — added 6 test functions for the retention-selection function |
+| `docs/PROJECT_STATUS.md` | This handoff write |
+| `docs/agents/`, `test_data/` | Untracked, pre-existing, unrelated to this session |
+
+**IMPORTANT — the uncommitted `weld_cloud_select_fsj_for_deletion()` work above may be wrong/obsolete.** See "Exact blocker" below before touching it further.
+
+### Original ask
+
+Continuation of the previous session's Milestone 2 (ThingsBoard) work. This session's asks, roughly in order: (1) fix the ThingsBoard PASS/FAIL dashboard widget that wasn't summing correctly, (2) figure out whether a newly-installed ThingsBoard MCP server changes anything, (3) scope and spec a new Milestone 3 for OTA + possibly BLE, (4) break Milestone 2's spec into implementable tickets, (5) start actual implementation test-first (TDD) on the `weld_cloud` component. Along the way the user also asked to extend `weldml_results.csv` to carry all 22 features (not just 2), record real date/time (not just boot-relative uptime) and asked about uploading raw `.fsj` files to ThingsBoard (ultimately declined) and reconsidering what the "Clear" button should actually do (unresolved — see blocker).
+
+### What was attempted / what worked
+
+1. **ThingsBoard MCP server**: found and fixed a blank `THINGSBOARD_API_KEY` in `~/.claude.json`'s `mcpServers.thingsboard.env` (user supplied a real key, reconnected via `/mcp`). Confirmed via direct tool calls that the server's tool surface covers devices/telemetry/alarms/users/assets/OTA but has **no dashboard/widget or tenant-profile CRUD at all** — saved as memory (`reference_thingsboard_mcp.md`) so future sessions don't re-attempt those.
+2. **Diagnosed and fixed the ThingsBoard PASS/FAIL widget** (was stuck at 0/0 no matter what). Root cause, confirmed empirically: `Sum` aggregation collapses a time window to one already-summed value *before* any data-key post-processing function runs, so a `predicted_class`-only post-processing approach can never work. Fix: firmware uploads separate `pass_flag`/`fail_flag` keys (1/0, mutually exclusive) with plain `Sum`, no post-processing function. Also had to fix the widget's time window (`History → Relative → Current day`, not `Realtime` — Realtime demonstrably dropped a point, showed 2/2 instead of the true 3/2) and learned dashboards save in three separate layers (data-key dialog → widget Apply → dashboard-level save icon) that all have to be done or changes revert on refresh. Verified live via MCP telemetry pushes (exact match, 3 PASS/2 FAIL). Rewrote `docs/THINGSBOARD_SETUP.md` Section 5, updated `docs/MILESTONE_2_REQUIREMENTS.md`'s payload description, commented on issue #1. Committed as `6468e32`.
+3. **Milestone 3 scoping**: ran `mattpocock-skills:grilling` (not the `/grill-with-docs` composite the previous session used — plain grilling was invoked directly this time) to scope OTA + the user's "WiFi and/or Bluetooth setup" ask. Grounded every round in real facts (read the existing generic-template `components/ota/`/`components/ble_provision/` scaffolding, researched ThingsBoard's actual HTTP OTA protocol, checked real FreeRTOS task priorities in the code — found `weld_mon`/`ota_task`/ESP-IDF's default httpd task all sit at the same priority 5 with zero core pinning anywhere, a real risk to the ~6s weld cycle, not hypothetical). Resolved Q16–Q21: BLE dropped entirely (SoftAP-fallback already solves provisioning), OTA via ThingsBoard's native OTA package feature over plain HTTPS (chunk/size params optional, so compatible with a modified version of the existing `esp_https_ota()`-based scaffolding), manual-trigger-only, git-describe versioning, checksum-hard-abort + ESP-IDF app rollback, a new host-tested `ota_policy` component, a concrete partition table, and — the most load-bearing finding — a `webserver_stop()`/`webserver_start()` interlock bracketing the *existing* write-idle processing window (Q3/Q6/Q12) to eliminate WiFi/HTTP CPU contention with `weld_mon`, explicitly flagged as not yet hardware-verified. Wrote `docs/MILESTONE_3_REQUIREMENTS.md`, logged Q16–Q21. User ran `/mattpocock-skills:to-spec` themselves (it's `disable-model-invocation: true`, cannot be run via the Skill tool) → published as **issue #2**, `ready-for-agent`. Committed as `b77228e`.
+4. **Broke Milestone 2 (issue #1) into tickets**: user ran `/mattpocock-skills:to-tickets 1` themselves (same invocation restriction as to-spec). Produced 4 tracer-bullet tickets with **native GitHub blocking dependencies** (via `gh api .../dependencies/blocked_by`, not just text): **#3** WiFi bring-up + reachable web UI + SPIFFS partition + webserver registration hook (no blockers) → **#4** view recent weld results (blocked by #3) → **#5** upload to ThingsBoard / `weld_cloud` (blocked by #4) → **#6** clear old `.fsj` files (blocked by #4, parallel to #5). Issue #1 itself is now the parent spec, not the implementation unit.
+5. **Started TDD on `weld_cloud`** (`mattpocock-skills:tdd`, confirmed the seam with the user first): built and fully tested `weld_cloud_parse_timestamp()` (converts a `.fsj` file's own embedded `[YY/MM/DD HH:MM:SS]` local-time timestamp — confirmed via real fixture inspection cross-checked against filesystem mtimes, not NTP/RTC which aren't available — to epoch ms using a fixed Central/UTC-6 offset, not DST-aware, per the user's confirmation that both historical fixtures and the live deployment are Central) and `weld_cloud_build_payload()` (builds the ThingsBoard telemetry JSON for unsent rows, all 22 features + `pass_flag`/`fail_flag` + existing CSV metadata, respects the upload watermark). A real bug was caught and fixed mid-TDD: `sscanf`'s return count doesn't reflect a missing trailing literal (`]`), so a malformed-timestamp test initially passed validation it shouldn't have — fixed using `%n`. Committed as `50c91c2`.
+6. **Discovered `weldml_results.csv` only logs 2 of 22 features** (only the 2 the Coarse Tree model uses) while the ticket #5 payload was supposed to carry all 22 — user explicitly authorized extending the CSV/cache to all 22 (a deliberate touch to the closed-MVP CSV schema, not scope creep). Logged as Q22, added as an acceptance criterion via a comment on issue #4.
+7. **Filed issue #7** (`needs-triage`): a pre-existing, unrelated `test_weld_parser_features` failure (`FFT_SpectralFlatness` actual `0.685587` vs expected `0.685072`, ~0.07% off, likely float-precision drift from the `logf`/`expf` geometric-mean computation across compiler/libm versions — not confirmed, not caused by anything this session touched, confirmed via `git diff` that `weld_parser.c` was never edited this session).
+8. **Started (now possibly-obsolete) work on `weld_cloud_select_fsj_for_deletion()`** — the retention-selection half of `weld_cloud` needed for ticket #6. Ranks `.fsj` files by the incrementing number embedded in the filename (not mtime — this project's own docs already flag FAT mtime as unreliable, and the user confirmed filenames increment reliably), excludes unparseable filenames from ever being deletion candidates (safety: never delete something whose age can't be confidently determined). Fully implemented, 6 test functions, all green. **Not committed** — see blocker below.
+9. User asked to also record real date/time in `weldml_results.csv` (confirmed: yes, add the `.fsj` file's embedded timestamp as its own column, not just `uptime_ms`) and separately "the filename(s) in it as well" — **this second part was never disambiguated** (candidates offered: already-satisfied by the existing `source_filename` column / a deletion-audit log / an upload-batch record — no answer received before the topic moved on).
+10. User asked about uploading the raw `.fsj` file itself to ThingsBoard (not just structured data) — this would have reversed `OPEN_QUESTIONS.md` Q13's explicit "raw `.fsj` upload out of scope" decision. Researched ThingsBoard's actual device-facing HTTP API and confirmed there is **no device-initiated file/binary upload endpoint** at all (only Telemetry/Attributes/RPC/Claiming — the Resources API used for OTA packages is admin/tenant-JWT-only, not device-access-token-callable). Presented the one workable path (raw text embedded as a big telemetry string value) and its tradeoffs, asked 3 clarifying questions. **User's answer: skip it entirely — resolved, dropped, no code changes needed.**
+
+### What failed / remains unverified
+
+- `test_weld_parser_features`'s `FFT_SpectralFlatness` failure (issue #7) — flagged, not investigated.
+- Milestone 3's CPU-contention fix (Q21) — explicitly not yet hardware-verified; needs the existing l060.fsj/l046.fsj timing tests re-run with WiFi/webserver active once implemented.
+- No firmware/hardware-integration code exists yet for tickets #3/#4 (WiFi bring-up, results caching) or Milestone 3 at all — only `weld_cloud`'s pure-logic pieces exist so far.
+
+### Exact blocker
+
+Immediately after the user said to skip raw-file upload, they said: **"so just clear the extracted data with the present button, don't delete the files."** This is very likely a real, well-motivated reversal of the whole `.fsj` retention/deletion design (`OPEN_QUESTIONS.md` Q14, ticket #6/issue #6, and the just-built-but-uncommitted `weld_cloud_select_fsj_for_deletion()`) — probably because once raw `.fsj` upload was ruled out, deleting local `.fsj` files would destroy the *only* copy of raw weld data forever, leaving just the extracted summary. But the exact intended behavior was never clarified before a context-threshold hook fired mid-conversation and forced this handoff. At least two live readings:
+
+- (a) The Clear button should reset/clear something else entirely — e.g. the cached rows / results-table display state that ticket #2 (issue #4) builds — and never touch `.fsj` files on the SD card at all. This would make `weld_cloud_select_fsj_for_deletion()` and ticket #6/issue #6 as currently written obsolete.
+- (b) Some narrower reading not yet considered.
+
+This is entangled with the still-unresolved "and the filename(s) in it as well" question from earlier in the same session (see point 9 above) — both should probably be resolved in the same conversation before writing or committing any more Clear-button-related code.
+
+### Exact next action
+
+Ask the user directly what "clear the extracted data with the present button, don't delete the files" should mean for the Clear button's actual behavior — offer concrete candidate interpretations (e.g. "reset the cached/displayed results-table state without ever touching the SD card" vs. others) — and resolve the still-open "filename(s) ... as well" ambiguity in the same conversation, **before** touching `weld_cloud_select_fsj_for_deletion()`, ticket #6 (issue #6), or `OPEN_QUESTIONS.md` Q14 again. Do not assume either answer.
+
+### Build/test/deploy state
+
+Host test suite (`tests/host/`, last built at `/tmp/weldml-host-tests` — a scratch build dir, not part of the repo): `weld_cloud` fully green, 13 assertions across timestamp-parsing, payload-building, and retention-selection (the retention-selection tests may need rework or deletion pending the blocker above). `weld_inference` passes. `test_weld_parser_features` fails on the pre-existing, unrelated issue #7. No ESP-IDF firmware build attempted this session (`idf.py build` not run) — nothing hardware-integration-level changed.
+
+### Running state
+
+None. No background processes, dev servers, or open worktrees from this session.
+
+### Runtime/hardware state
+
+Unchanged from the MVP-complete state recorded further down this file — no new firmware built or flashed this session. Board should still be running whatever MVP-complete build was last flashed.
+
+### Deferred items / open questions the user didn't fully resolve
+
+- The Clear-button reversal (see "Exact blocker" above) — top priority for next session.
+- The "filename(s) ... as well" ambiguity (see "Exact blocker" above) — same conversation.
+- Whether `weld_cloud_select_fsj_for_deletion()` and its tests should be kept, reworked, or deleted, pending the above.
+- Ticket #6 (issue #6)'s acceptance criteria likely need a rewrite once Clear-button behavior is clarified — it currently still says "delete old `.fsj` files, keep most recent N," which may now be wrong.
+- `OPEN_QUESTIONS.md` Q14 ("Local Data Retention — `.fsj` Cleanup Policy") may need to be reopened/amended once clarified.
+- The pre-existing `FFT_SpectralFlatness` test failure (issue #7) — filed, not investigated.
+- No firmware code exists yet for tickets #3/#4 (WiFi bring-up, results caching) — only `weld_cloud`'s pure logic.
+
+### Project-specific rules already documented (unchanged, just a pointer)
+
+`CLAUDE.md`'s GPIO safety rules (GPIO48 backlight, GPIO38 WS2812, GPIO45 boot-strap, GPIO0 BOOT button), SD-ownership rules (never access SD while MSC is active), and the mandatory explicit-board build command (`idf.py -D BOARD=waveshare-esp32-s3-lcd-147 build` — never plain `idf.py build`) all still apply once firmware/hardware work resumes. Nothing this session contradicts them.
+
+### Next-session prompt
+
+Read `docs/PROJECT_STATUS.md` first (this section). Then ask the user directly what the Clear button should actually do now that raw `.fsj` upload is out of scope — do not assume it still means "delete old `.fsj` files, keep most recent N" (the pre-existing design in `OPEN_QUESTIONS.md` Q14/ticket #6). Resolve the "filename(s) ... as well" question in the same conversation. Only after that's clear, decide whether to keep, rework, or discard the uncommitted `weld_cloud_select_fsj_for_deletion()` work.
+
+---
+
+## Session Handoff — 2026-08-05 (Milestone 2 grilled + spec'd; ThingsBoard admin setup in progress)
+
+**Branch:** `main`
+**Last commit:** `44d1aed` — docs: mark MVP complete in PROJECT_STATUS.md (no new commits this
+session — all changes below are uncommitted)
+**Working tree:** DIRTY
+
+| File | State |
+|---|---|
+| `docs/OPEN_QUESTIONS.md` | Modified — added Q11–Q15 |
+| `docs/MVP_REQUIREMENTS.md` | Modified — annotated out-of-scope items now unlocked by Milestone 2 |
+| `docs/MILESTONE_2_REQUIREMENTS.md` | New, untracked |
+| `docs/THINGSBOARD_SETUP.md` | New, untracked |
+| `docs/agents/` (`issue-tracker.md`, `triage-labels.md`, `domain.md`) | New, untracked — from `/setup-matt-pocock-skills` |
+| `CLAUDE.md` | Modified — added `## Agent skills` block (this file is gitignored/not committed per its own header, so it won't show in `git status`) |
+| `test_data/` | Untracked — pre-existing from before this session, not part of this work |
+
+### Original ask
+
+User wants a new milestone on top of the (closed, unchanged) MVP: a local ESP32 webserver that
+displays weld data, a button to upload results to a ThingsBoard cloud dashboard for a
+university's "Industry 4.0 Lab," and a button to clear old `.fsj` files from the SD card
+without breaking the existing USB-MSC/firmware SD-ownership rules. Also wanted: ThingsBoard
+tenant/dashboard set up and branded, with text instructions (manual, not automated) since the
+user would rather run ThingsBoard admin steps themselves than have an agent automate them.
+
+### What was attempted / what worked
+
+1. Ran a full `/grill-with-docs` (grilling + domain-modeling) session resolving 15 design
+   decisions for this milestone — logged as `OPEN_QUESTIONS.md` Q11–Q15 and summarized in the
+   new `docs/MILESTONE_2_REQUIREMENTS.md`. Key resolved decisions: HTTPS (not MQTT) to
+   ThingsBoard, structured-results-only upload (not raw `.fsj`), SD access confined to the
+   existing write-idle-triggered window (no new SD ownership states), keep-most-recent-N `.fsj`
+   retention, and a waiver of the base template's "brand fork" separation (ThingsBoard code
+   lives directly in this repo by explicit decision).
+2. Ran `/setup-matt-pocock-skills` (had not been run before) — configured GitHub Issues as the
+   issue tracker (`docs/agents/issue-tracker.md`), default triage labels
+   (`docs/agents/triage-labels.md`), single-context domain docs (`docs/agents/domain.md`), and
+   added the `## Agent skills` block to `CLAUDE.md`.
+3. Installed and authenticated `gh` CLI (was missing from this WSL environment) —
+   `gh auth status` confirms logged in as `l8fordinner` with `repo`, `read:org`, `workflow`
+   scopes.
+4. Ran `/mattpocock-skills:to-spec` — confirmed the testing seam with the user first (one new
+   pure-logic component, `weld_cloud`, host-testable the same way `weld_parser`/`weld_inference`
+   already are; everything else — HTTP handlers, the actual HTTPS call, actual SD
+   delete — stays thin hardware-verified-only glue). Published the spec as
+   **[GitHub issue #1](https://github.com/l8fordinner/weldml-esp32/issues/1)**, labeled
+   `ready-for-agent`. Created the `ready-for-agent` label first since it didn't exist in the
+   repo yet.
+5. Wrote `docs/THINGSBOARD_SETUP.md` — manual admin walkthrough for `iot.mwe-inc.com`
+   (ThingsBoard CE v4.3.1.3, confirmed via a live version check): dedicated tenant profile with
+   containment limits (values proposed by the agent, accepted by the user — see Q15 and the doc
+   for the full table and reasoning), assigning it to the existing "Industry 4.0 Lab" tenant,
+   device + access-token creation, and dashboard creation/branding (dashboard-level only, not
+   ThingsBoard's paid White Labeling feature).
+6. User executed steps 1–3 of that doc live and reported back screenshots/output at each step;
+   the doc was corrected twice against what the user actually saw in the UI:
+   - Tenant-profile rate-limit fields are a structured `+`-icon modal (Number of
+     messages/Per seconds tiers with a Preview string), not a free-text box — doc fixed.
+   - ThingsBoard's own "device created" example command uses port 8080 plain HTTP, which is
+     not exposed to the internet on this instance (confirmed: times out) — doc now tells users
+     to ignore that example and use HTTPS/443 instead, with both bash and Windows-`cmd.exe`
+     variants of the smoke-test command.
+   - The device+token+HTTPS chain is **confirmed working**: user ran the corrected `curl`
+     smoke test and got `200 OK` (verified live, not just from documentation).
+7. Added `docs/THINGSBOARD_SETUP.md` Section 5 (PASS/FAIL running-total dashboard widget, using
+   the already-planned `predicted_class` telemetry key with a data-post-processing function —
+   no firmware or Rule Engine changes needed). **This section was wrong on the first pass**
+   (claimed a gear-icon "Advanced settings" location) — user reported no such option exists.
+   Re-researched against current official ThingsBoard docs and corrected it: it's a **pencil
+   icon** opening a "Data Key Configuration" dialog, with both the post-processing-function
+   toggle and the Aggregation dropdown on the **General** tab (not "Advanced," which is
+   appearance-only) — this reflects a ThingsBoard v3.6 UI redesign. This correction has **not
+   yet been verified** by the user against the live UI.
+
+### What failed / remains unverified
+
+- Section 5's corrected pencil-icon/General-tab instructions are from official docs research,
+  not yet confirmed against the live `iot.mwe-inc.com` UI.
+- Section 5's aggregation-over-time-window caveat (Sum aggregation may only apply reliably over
+  a fixed History-mode range, not a sliding Realtime window) is flagged in the doc as unverified
+  — may need a fallback to History mode once real telemetry exists to test against.
+- **Unclear whether the user actually completed Section 4 (create/brand the dashboard) before
+  asking about the Section 5 widget** — Section 5 assumes a dashboard already exists to add a
+  widget to. Not confirmed either way in this session.
+- No firmware code for issue #1 has been written yet — `weld_cloud`, the new HTTP endpoints,
+  WiFi bring-up, and the SPIFFS partition-table change are all still just the spec, not
+  implemented.
+
+### Exact blocker
+
+None blocking — session ended because the user is restarting Claude Code (not because of a
+technical blocker), to pick up a newly-installed ThingsBoard MCP server.
+
+### Important discrepancy to resolve before assuming anything
+
+The user stated they installed an MCP server for ThingsBoard with the lab admin's API key,
+intending it to enable running `/mattpocock-skills:to-spec` again next session (presumably for
+API-driven ThingsBoard admin automation, which would be a reversal or extension of the earlier
+explicit decision that ThingsBoard admin work stays manual/human-driven — see `Out of Scope` in
+the issue #1 spec and the framing of `docs/THINGSBOARD_SETUP.md`). **However**, the tool list
+visible in this session after the `/mcp` command only showed a **Google Drive** MCP connection
+(`mcp__claude_ai_Google_Drive__*` tools) — no ThingsBoard MCP tools appeared. This was not
+independently verified further before the session ended. Do not assume a ThingsBoard MCP
+server is actually connected/available next session — check first.
+
+### Exact next action
+
+Read this file, then run `/mcp` (or equivalent) to check what MCP servers are actually
+connected, and confirm with the user whether a ThingsBoard MCP tool is genuinely available
+before assuming it changes anything about the earlier "ThingsBoard admin work is manual, not
+automated" decision — then clarify with the user what the next `/mattpocock-skills:to-spec`
+run should actually cover (new agent-automatable ThingsBoard-API work? a revision of the
+existing manual-instructions approach? something else?) before running it, since `to-spec`
+itself is explicitly "do not interview the user" and needs an unambiguous target scope handed
+to it, not an assumption.
+
+### Build/test/deploy state
+
+No build attempted this session — no firmware code has changed. Last known-good build/flash
+state is unchanged from the MVP-complete handoff further down this file.
+
+### Running state
+
+None. No background processes, dev servers, or open worktrees from this session.
+
+### Runtime/hardware state
+
+Unchanged from the MVP-complete state recorded further down this file — no new firmware was
+built or flashed this session. Board should still be running whatever MVP-complete build was
+last flashed.
+
+### Deferred items / open questions the user didn't fully resolve
+
+- Whether Section 4 (dashboard creation/branding) of `docs/THINGSBOARD_SETUP.md` was actually
+  completed — see "What failed / remains unverified" above.
+- Whether the newly-installed ThingsBoard MCP server should change the "manual admin work, not
+  agent-automated" decision baked into the issue #1 spec and `THINGSBOARD_SETUP.md` — this is
+  a real scope question for the user to decide, not something to infer.
+- The device access token used in the live smoke test was pasted in plaintext into the chat
+  transcript; the user was told this and offered to regenerate it via "Manage credentials" but
+  had not indicated a decision on rotating it as of this handoff.
+
+### Project-specific rules already documented (unchanged, just a pointer)
+
+`CLAUDE.md` in this repo has hard rules that will matter once `weld_cloud`/webserver
+implementation actually starts: the GPIO safety rules (GPIO48 backlight, GPIO38 WS2812,
+GPIO45 boot-strap, GPIO0 BOOT button), the SD-ownership rules (never access SD while MSC is
+active), and the mandatory explicit-board build command
+(`idf.py -D BOARD=waveshare-esp32-s3-lcd-147 build` — never plain `idf.py build`). Nothing in
+this session's design work contradicts or needs to change any of these.
+
+### Next-session prompt
+
+Read `docs/PROJECT_STATUS.md` first (this section). Then check what MCP servers are actually
+connected before assuming a ThingsBoard MCP tool is available, and clarify the target scope
+with the user before running `/mattpocock-skills:to-spec` again.
+
+---
+
 ## Session Handoff — 2026-07-23 (added rotated status text labels on LCD)
 
 **Branch:** `main`
