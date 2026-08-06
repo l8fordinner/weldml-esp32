@@ -272,6 +272,8 @@ void webserver_start(void)
     spiffs_init();
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    /* 11 built-in URIs (s_uris below) + 2 spare slots for product-specific
+     * endpoints registered via webserver_register_uri(). */
     config.max_uri_handlers = 13;
 
     if (httpd_start(&s_server, &config) != ESP_OK) {
@@ -293,4 +295,13 @@ void webserver_stop(void)
         s_server = NULL;
     }
     esp_vfs_spiffs_unregister("spiffs");
+}
+
+esp_err_t webserver_register_uri(const httpd_uri_t *uri)
+{
+    if (!s_server) {
+        ESP_LOGE(TAG, "webserver_register_uri() called before webserver_start()");
+        return ESP_ERR_INVALID_STATE;
+    }
+    return httpd_register_uri_handler(s_server, uri);
 }

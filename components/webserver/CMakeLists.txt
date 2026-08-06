@@ -8,4 +8,5 @@ idf_component_register(
         esp_netif
         spiffs
         esp_timer
+        ota
 )

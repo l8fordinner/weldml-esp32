@@ -13,3 +13,8 @@ endif()
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(weldml-esp32)
+
+# Package web/*.html, style.css, app.js into the "spiffs" partition webserver.c
+# mounts at /web. Without this the partition is blank and every static-file
+# request 404s even though the httpd server itself is up.
+spiffs_create_partition_image(spiffs ${CMAKE_SOURCE_DIR}/web FLASH_IN_PROJECT)

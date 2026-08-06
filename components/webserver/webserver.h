@@ -1,5 +1,8 @@
 #pragma once
 
+#include "esp_err.h"
+#include "esp_http_server.h"
+
 /**
  * @brief Start the HTTP web server.
  *
@@ -12,3 +15,17 @@ void webserver_start(void);
 
 /** @brief Stop the web server and unmount SPIFFS. */
 void webserver_stop(void);
+
+/**
+ * @brief Register a product-specific URI handler on the running server.
+ *
+ * Lets other components (e.g. weld results, clear) add endpoints without
+ * modifying this generic component's own source. Must be called after
+ * webserver_start(). A fixed number of extra slots are reserved beyond the
+ * built-in URIs (see max_uri_handlers in webserver.c) — registering beyond
+ * that capacity fails.
+ *
+ * @return ESP_OK on success, ESP_ERR_INVALID_STATE if the server isn't
+ *         running yet, or the underlying httpd_register_uri_handler() error.
+ */
+esp_err_t webserver_register_uri(const httpd_uri_t *uri);

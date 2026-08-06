@@ -14,4 +14,9 @@ idf_component_register(
         usb_msc_sd
         weld_processor
         weld_parser
+        wifi_provision
+        webserver
+        nvs_flash
+        esp_netif
+        esp_event
 )

@@ -14,11 +14,16 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_event.h"
 #include "esp_log.h"
+#include "esp_netif.h"
 #include "esp_system.h"
+#include "nvs_flash.h"
 #include "lcd_st7789.h"
 #include "usb_msc_sd.h"
 #include "weld_processor.h"
+#include "webserver.h"
+#include "wifi_provision.h"
 #include "board.h"
 
 static const char *TAG = "main";
@@ -26,6 +31,15 @@ static const char *TAG = "main";
 void app_main(void)
 {
     ESP_LOGI(TAG, "WeldML ESP32 starting — IDF v%s", esp_get_idf_version());
+
+    esp_err_t nvs_ret = nvs_flash_init();
+    if (nvs_ret == ESP_ERR_NVS_NO_FREE_PAGES || nvs_ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        nvs_ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(nvs_ret);
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     lcd_st7789_config_t lcd_cfg = {
         .mosi_pin = BOARD_LCD_MOSI_PIN,
@@ -60,8 +74,17 @@ void app_main(void)
         }
     }
 
-    /* Start write-idle monitor. LCD transitions to CYAN (waiting) inside here. */
+    /* Start write-idle monitor. LCD transitions to CYAN (waiting) inside here.
+     * Runs on its own task, so the WiFi/webserver bring-up below (which can
+     * block for several seconds during a failed station connect attempt)
+     * never delays weld processing. */
     ESP_ERROR_CHECK(weld_processor_start());
+
+    /* WiFi bring-up never touches SD/SPI (see docs/OPEN_QUESTIONS.md Q12) —
+     * safe to run independently of the write-idle-triggered SD ownership
+     * rules above. */
+    wifi_provision_start();
+    webserver_start();
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));

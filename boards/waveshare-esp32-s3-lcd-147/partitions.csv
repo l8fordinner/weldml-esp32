@@ -1,8 +1,13 @@
 # WeldML ESP32 — Waveshare ESP32-S3-LCD-1.47 partition table
-# 16MB flash.  Single factory app — no OTA, no SPIFFS (Stage 3+).
-# OTA partitions will be added when OTA is unlocked as a milestone feature.
+# 16MB flash. OTA-capable (Milestone 3) + SPIFFS (Milestone 2 web UI assets).
+# Layout resolved in docs/OPEN_QUESTIONS.md Q20 — combined so Milestone 2's WiFi/
+# webserver/partition-table work isn't redone for Milestone 3's OTA needs.
+# Total used: ~8.4MB of 16MB, comfortable margin.
 #
 # Name,     Type, SubType,  Offset,   Size,     Flags
 nvs,        data, nvs,      0x9000,   0x6000,
-phy_init,   data, phy,      0xf000,   0x1000,
-factory,    app,  factory,  0x10000,  0x300000,
+otadata,    data, ota,      0xf000,   0x2000,
+phy_init,   data, phy,      0x11000,  0x1000,
+ota_0,      app,  ota_0,    0x20000,  0x300000,
+ota_1,      app,  ota_1,    0x320000, 0x300000,
+spiffs,     data, spiffs,   0x620000, 0x200000,
