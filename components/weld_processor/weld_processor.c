@@ -13,8 +13,11 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "esp_crt_bundle.h"
+#include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "nvs.h"
 #include "tusb_msc_storage.h"
 #include "lcd_st7789.h"
 #include "weld_cloud.h"
@@ -46,11 +49,29 @@ static weld_cloud_row_t s_results_cache[RESULTS_CACHE_CAPACITY];
 static size_t s_results_cache_count = 0;
 static SemaphoreHandle_t s_cache_mutex = NULL;
 
+/*
+ * How many rows have ever been evicted from the front of s_results_cache. The
+ * NVS-persisted upload watermark (#5) is a GLOBAL monotonic count of rows
+ * uploaded since the cache's inception, not a raw array index -- once eviction
+ * starts (past RESULTS_CACHE_CAPACITY), array indices shift, so a raw-index
+ * watermark would silently desync (weld_cloud_build_payload() could report
+ * "nothing to upload" even with genuinely new unsent rows). Converting
+ * global <-> local (array-index) watermark values around this offset keeps
+ * uploads correct across eviction. See handler_api_upload().
+ */
+static uint32_t s_results_cache_evicted = 0;
+
 /* Generous upper bound for RESULTS_CACHE_CAPACITY rows of results JSON (~700-900 bytes/row
  * observed; budgets for longer float representations than the test fixture uses). Heap
  * (PSRAM-backed, see sdkconfig CONFIG_SPIRAM*) rather than stack -- too large to be safe on
  * the HTTP server task's stack. */
 #define RESULTS_JSON_BUF_SIZE (64 * 1024)
+
+/* Fixed for this deployment (see docs/THINGSBOARD_SETUP.md) -- only the per-device access
+ * token varies, stored via POST /api/config's tb_token field. */
+#define THINGSBOARD_HOST "iot.mwe-inc.com"
+#define TB_TOKEN_MAX_LEN 128
+#define TB_URL_BUF_SIZE  256
 
 /*
  * Write-activity tracking.
@@ -312,6 +333,9 @@ static bool write_result_json(const char *src_path, time_t src_mtime,
             cache_row.features_ms = features_ms;
 
             if (xSemaphoreTake(s_cache_mutex, portMAX_DELAY) == pdTRUE) {
+                if (s_results_cache_count >= RESULTS_CACHE_CAPACITY) {
+                    s_results_cache_evicted++;
+                }
                 weld_cloud_cache_append(s_results_cache, RESULTS_CACHE_CAPACITY,
                                          &s_results_cache_count, &cache_row);
                 xSemaphoreGive(s_cache_mutex);
@@ -559,6 +583,123 @@ static esp_err_t handler_api_results(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* GET /results -- the results-table page (ticket #4). Product-specific content, so
+ * served via weld_processor rather than baked into the generic webserver component. */
+static esp_err_t handler_results_page(httpd_req_t *req)
+{
+    return webserver_serve_file(req, "/web/results.html", "text/html");
+}
+
+/*
+ * POST /api/upload -- uploads unsent cached rows to ThingsBoard (ticket #5). No
+ * request body; always uploads everything not yet marked sent per the NVS watermark.
+ * A failed upload (network error or non-2xx) never advances the watermark, so a
+ * retry after failure is always safe (no duplicate telemetry, no falsely-marked-sent
+ * records) -- per this ticket's explicit acceptance criteria.
+ */
+static esp_err_t handler_api_upload(httpd_req_t *req)
+{
+    char tb_token[TB_TOKEN_MAX_LEN] = {0};
+    nvs_handle_t nvs;
+    if (nvs_open("config", NVS_READONLY, &nvs) == ESP_OK) {
+        size_t len = sizeof(tb_token);
+        nvs_get_str(nvs, "tb_token", tb_token, &len);
+        nvs_close(nvs);
+    }
+
+    httpd_resp_set_type(req, "application/json");
+
+    if (tb_token[0] == '\0') {
+        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"no ThingsBoard access token configured\"}");
+        return ESP_OK;
+    }
+
+    uint32_t global_watermark = 0;
+    if (nvs_open("config", NVS_READONLY, &nvs) == ESP_OK) {
+        nvs_get_u32(nvs, "tb_watermark", &global_watermark);
+        nvs_close(nvs);
+    }
+
+    char *buf = malloc(RESULTS_JSON_BUF_SIZE);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+
+    size_t row_count = 0;
+    uint32_t evicted = 0;
+    size_t n = 0;
+    uint32_t new_local_watermark = 0;
+    if (xSemaphoreTake(s_cache_mutex, portMAX_DELAY) == pdTRUE) {
+        row_count = s_results_cache_count;
+        evicted = s_results_cache_evicted;
+        /* Global -> local (array-index) watermark, per the eviction-offset comment
+         * above s_results_cache_evicted. Clamped to 0 if the persisted watermark
+         * refers to rows already evicted from the cache (those specific unsent rows,
+         * if any, are unrecoverable here -- still safe in weldml_results.csv). */
+        uint32_t local_watermark = (global_watermark > evicted) ? (global_watermark - evicted) : 0;
+        new_local_watermark = (uint32_t)row_count;
+        n = weld_cloud_build_payload(s_results_cache, row_count, local_watermark,
+                                      buf, RESULTS_JSON_BUF_SIZE, &new_local_watermark);
+        xSemaphoreGive(s_cache_mutex);
+    }
+
+    if (n == 0) {
+        free(buf);
+        if ((global_watermark <= evicted ? 0 : global_watermark - evicted) >= row_count) {
+            httpd_resp_sendstr(req, "{\"ok\":true,\"uploaded\":0}");
+        } else {
+            httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"payload too large for buffer\"}");
+        }
+        return ESP_OK;
+    }
+
+    char url[TB_URL_BUF_SIZE];
+    snprintf(url, sizeof(url), "https://%s/api/v1/%s/telemetry", THINGSBOARD_HOST, tb_token);
+
+    esp_http_client_config_t http_cfg = {
+        .url = url,
+        .method = HTTP_METHOD_POST,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .timeout_ms = 15000,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_post_field(client, buf, (int)n);
+
+    esp_err_t err = esp_http_client_perform(client);
+    int status = (err == ESP_OK) ? esp_http_client_get_status_code(client) : 0;
+    esp_http_client_cleanup(client);
+    free(buf);
+
+    char resp[128];
+    if (err == ESP_OK && status >= 200 && status < 300) {
+        uint32_t new_global_watermark = evicted + new_local_watermark;
+        if (nvs_open("config", NVS_READWRITE, &nvs) == ESP_OK) {
+            nvs_set_u32(nvs, "tb_watermark", new_global_watermark);
+            nvs_commit(nvs);
+            nvs_close(nvs);
+        }
+        unsigned uploaded = (unsigned)(new_global_watermark > global_watermark
+                                        ? new_global_watermark - global_watermark : 0);
+        snprintf(resp, sizeof(resp), "{\"ok\":true,\"uploaded\":%u}", uploaded);
+        httpd_resp_sendstr(req, resp);
+        ESP_LOGI(TAG, "Uploaded %u result(s) to ThingsBoard, watermark %" PRIu32 " -> %" PRIu32,
+                 uploaded, global_watermark, new_global_watermark);
+    } else if (err != ESP_OK) {
+        snprintf(resp, sizeof(resp), "{\"ok\":false,\"error\":\"request failed: %s\"}",
+                 esp_err_to_name(err));
+        httpd_resp_sendstr(req, resp);
+        ESP_LOGW(TAG, "ThingsBoard upload failed: %s", esp_err_to_name(err));
+    } else {
+        snprintf(resp, sizeof(resp), "{\"ok\":false,\"error\":\"HTTP %d\"}", status);
+        httpd_resp_sendstr(req, resp);
+        ESP_LOGW(TAG, "ThingsBoard upload failed: HTTP %d", status);
+    }
+
+    return ESP_OK;
+}
+
 esp_err_t weld_processor_register_web_endpoints(void)
 {
     static const httpd_uri_t s_results_uri = {
@@ -566,5 +707,24 @@ esp_err_t weld_processor_register_web_endpoints(void)
         .method = HTTP_GET,
         .handler = handler_api_results,
     };
-    return webserver_register_uri(&s_results_uri);
+    static const httpd_uri_t s_results_page_uri = {
+        .uri = "/results",
+        .method = HTTP_GET,
+        .handler = handler_results_page,
+    };
+    static const httpd_uri_t s_upload_uri = {
+        .uri = "/api/upload",
+        .method = HTTP_POST,
+        .handler = handler_api_upload,
+    };
+
+    esp_err_t err = webserver_register_uri(&s_results_uri);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = webserver_register_uri(&s_results_page_uri);
+    if (err != ESP_OK) {
+        return err;
+    }
+    return webserver_register_uri(&s_upload_uri);
 }

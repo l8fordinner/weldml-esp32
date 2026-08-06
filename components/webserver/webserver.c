@@ -53,7 +53,7 @@ static void spiffs_init(void)
 
 /* ── Static file helper ──────────────────────────────────────────────────── */
 
-static esp_err_t serve_file(httpd_req_t *req, const char *path,
+esp_err_t webserver_serve_file(httpd_req_t *req, const char *path,
                              const char *content_type)
 {
     FILE *f = fopen(path, "r");
@@ -77,32 +77,32 @@ static esp_err_t serve_file(httpd_req_t *req, const char *path,
 
 static esp_err_t handler_index(httpd_req_t *req)
 {
-    return serve_file(req, "/web/index.html", "text/html");
+    return webserver_serve_file(req, "/web/index.html", "text/html");
 }
 
 static esp_err_t handler_config(httpd_req_t *req)
 {
-    return serve_file(req, "/web/config.html", "text/html");
+    return webserver_serve_file(req, "/web/config.html", "text/html");
 }
 
 static esp_err_t handler_ota(httpd_req_t *req)
 {
-    return serve_file(req, "/web/ota.html", "text/html");
+    return webserver_serve_file(req, "/web/ota.html", "text/html");
 }
 
 static esp_err_t handler_status(httpd_req_t *req)
 {
-    return serve_file(req, "/web/status.html", "text/html");
+    return webserver_serve_file(req, "/web/status.html", "text/html");
 }
 
 static esp_err_t handler_style(httpd_req_t *req)
 {
-    return serve_file(req, "/web/style.css", "text/css");
+    return webserver_serve_file(req, "/web/style.css", "text/css");
 }
 
 static esp_err_t handler_appjs(httpd_req_t *req)
 {
-    return serve_file(req, "/web/app.js", "application/javascript");
+    return webserver_serve_file(req, "/web/app.js", "application/javascript");
 }
 
 /* ── API: GET /api/status ────────────────────────────────────────────────── */
@@ -196,10 +196,12 @@ static esp_err_t handler_api_config(httpd_req_t *req)
 
     char mqtt_url[256] = {0};
     char ota_url[512]  = {0};
-    json_str(body, "mqtt_url", mqtt_url, sizeof(mqtt_url));
-    json_str(body, "ota_url",  ota_url,  sizeof(ota_url));
+    char tb_token[128] = {0};
+    json_str(body, "mqtt_url",  mqtt_url,  sizeof(mqtt_url));
+    json_str(body, "ota_url",   ota_url,   sizeof(ota_url));
+    json_str(body, "tb_token",  tb_token,  sizeof(tb_token));
 
-    if (mqtt_url[0] != '\0' || ota_url[0] != '\0') {
+    if (mqtt_url[0] != '\0' || ota_url[0] != '\0' || tb_token[0] != '\0') {
         nvs_handle_t nvs;
         ESP_ERROR_CHECK(nvs_open("config", NVS_READWRITE, &nvs));
         if (mqtt_url[0] != '\0') {
@@ -209,6 +211,10 @@ static esp_err_t handler_api_config(httpd_req_t *req)
         if (ota_url[0] != '\0') {
             nvs_set_str(nvs, "ota_url", ota_url);
             ESP_LOGI(TAG, "OTA URL saved: %s", ota_url);
+        }
+        if (tb_token[0] != '\0') {
+            nvs_set_str(nvs, "tb_token", tb_token);
+            ESP_LOGI(TAG, "ThingsBoard access token saved"); /* never log the value -- it's a credential */
         }
         nvs_commit(nvs);
         nvs_close(nvs);
@@ -272,9 +278,10 @@ void webserver_start(void)
     spiffs_init();
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    /* 11 built-in URIs (s_uris below) + 2 spare slots for product-specific
-     * endpoints registered via webserver_register_uri(). */
-    config.max_uri_handlers = 13;
+    /* 11 built-in URIs (s_uris below) + 4 slots for product-specific endpoints
+     * registered via webserver_register_uri(): GET /results, GET /api/results,
+     * POST /api/upload (tickets #4/#5), POST /api/clear (ticket #6, upcoming). */
+    config.max_uri_handlers = 15;
 
     if (httpd_start(&s_server, &config) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start HTTP server");

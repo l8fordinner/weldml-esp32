@@ -29,3 +29,14 @@ void webserver_stop(void);
  *         running yet, or the underlying httpd_register_uri_handler() error.
  */
 esp_err_t webserver_register_uri(const httpd_uri_t *uri);
+
+/**
+ * @brief Serve a file from the SPIFFS partition this component mounts (/web),
+ * with the given Content-Type header.
+ *
+ * For product-specific page routes registered via webserver_register_uri()
+ * that want to reuse this component's static-file serving instead of
+ * duplicating it (e.g. weld_processor's GET /results).
+ */
+esp_err_t webserver_serve_file(httpd_req_t *req, const char *path,
+                                const char *content_type);

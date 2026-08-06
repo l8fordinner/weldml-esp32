@@ -96,3 +96,11 @@ button.secondary { background: var(--muted); }
 .info-row { display: flex; justify-content: space-between; padding: 0.35rem 0; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
 .info-row:last-child { border-bottom: none; }
 .info-label { color: var(--muted); }
+
+.muted { color: var(--muted); }
+
+table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; }
+.result-pass { color: var(--success); font-weight: 600; }
+.result-fail { color: var(--danger); font-weight: 600; }

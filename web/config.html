@@ -14,6 +14,7 @@
     <a href="/config">Config</a>
     <a href="/ota">OTA</a>
     <a href="/status">Status</a>
+    <a href="/results">Results</a>
   </nav>
 </header>
 
@@ -28,6 +29,10 @@
     <input type="url" id="ota_url" name="ota_url"
            placeholder="http://server.example.com/firmware.bin">
 
+    <label for="tb_token">ThingsBoard Access Token</label>
+    <input type="password" id="tb_token" name="tb_token"
+           placeholder="device access token" autocomplete="off">
+
     <button type="submit">Save</button>
   </form>
   <p id="status-msg"></p>
@@ -40,8 +45,9 @@ document.getElementById('config-form').addEventListener('submit', async e => {
   showStatus('Saving…', '');
   try {
     const res = await postJSON('/api/config', {
-      mqtt_url: document.getElementById('mqtt_url').value,
-      ota_url:  document.getElementById('ota_url').value,
+      mqtt_url:  document.getElementById('mqtt_url').value,
+      ota_url:   document.getElementById('ota_url').value,
+      tb_token:  document.getElementById('tb_token').value,
     });
     showStatus(res.ok ? 'Saved.' : 'Error saving config.', res.ok ? 'ok' : 'error');
   } catch (err) {

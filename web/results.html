@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Weld Results — ESP32 Device</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>ESP32 Device</h1>
+  <nav>
+    <a href="/">WiFi</a>
+    <a href="/config">Config</a>
+    <a href="/ota">OTA</a>
+    <a href="/status">Status</a>
+    <a href="/results">Results</a>
+  </nav>
+</header>
+
+<div class="card" style="max-width: 900px;">
+  <h2>Recent Weld Results</h2>
+  <table id="results-table">
+    <thead>
+      <tr>
+        <th>Timestamp</th>
+        <th>File</th>
+        <th>Result</th>
+        <th>Probability</th>
+      </tr>
+    </thead>
+    <tbody id="results-body">
+      <tr><td colspan="4" class="muted">Loading…</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Upload to ThingsBoard</h2>
+  <button id="upload-btn" type="button">Upload</button>
+  <p id="status-msg"></p>
+</div>
+
+<script src="/app.js"></script>
+<script>
+async function loadResults() {
+  const tbody = document.getElementById('results-body');
+  try {
+    const rows = await (await fetch('/api/results')).json();
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="muted">No results yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map(r => `
+      <tr>
+        <td>${r.fsj_timestamp || '—'}</td>
+        <td>${r.source_filename || '—'}</td>
+        <td class="${r.pass_flag ? 'result-pass' : 'result-fail'}">${r.label || '—'}</td>
+        <td>${r.probability_class1 !== undefined ? r.probability_class1.toFixed(3) : '—'}</td>
+      </tr>
+    `).reverse().join('');
+  } catch (err) {
+    tbody.innerHTML = '<tr><td colspan="4" class="muted">Could not load results.</td></tr>';
+  }
+}
+
+document.getElementById('upload-btn').addEventListener('click', async () => {
+  showStatus('Uploading…', '');
+  try {
+    const res = await fetch('/api/upload', { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) {
+      showStatus(`Uploaded ${data.uploaded} record${data.uploaded === 1 ? '' : 's'}.`, 'ok');
+    } else {
+      showStatus('Failed: ' + (data.error || 'unknown error'), 'error');
+    }
+  } catch (err) {
+    showStatus('Failed: ' + err.message, 'error');
+  }
+});
+
+loadResults();
+setInterval(loadResults, 10000);
+</script>
+</body>
+</html>
