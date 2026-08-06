@@ -1,6 +1,7 @@
 #include "weld_cloud.h"
 
 #include <stdio.h>
+#include <string.h>
 
 /*
  * Days since 1970-01-01 for a proleptic-Gregorian civil date, per Howard Hinnant's
@@ -122,4 +123,72 @@ bool weld_cloud_check_clear_allowed(uint32_t watermark, size_t row_count, bool f
 
     *out_unsent_count = 0;
     return true;
+}
+
+void weld_cloud_cache_append(weld_cloud_row_t *rows, size_t capacity, size_t *count,
+                              const weld_cloud_row_t *new_row)
+{
+    if (*count >= capacity) {
+        memmove(&rows[0], &rows[1], (capacity - 1) * sizeof(rows[0]));
+        rows[capacity - 1] = *new_row;
+        return;
+    }
+
+    rows[*count] = *new_row;
+    (*count)++;
+}
+
+size_t weld_cloud_build_results_json(const weld_cloud_row_t *rows, size_t row_count,
+                                      char *out_json, size_t out_size)
+{
+    if (row_count == 0) {
+        return 0;
+    }
+
+    size_t pos = 0;
+
+#define APPEND(...)                                                          \
+    do {                                                                     \
+        if (pos >= out_size) {                                               \
+            return 0;                                                       \
+        }                                                                    \
+        int wr_ = snprintf(out_json + pos, out_size - pos, __VA_ARGS__);     \
+        if (wr_ < 0 || (size_t)wr_ >= out_size - pos) {                      \
+            return 0;                                                       \
+        }                                                                    \
+        pos += (size_t)wr_;                                                  \
+    } while (0)
+
+    APPEND("[");
+    for (size_t i = 0; i < row_count; i++) {
+        const weld_cloud_row_t *row = &rows[i];
+
+        int pass_flag = (row->predicted_class == WELD_INFERENCE_CLASS_NP) ? 1 : 0;
+        int fail_flag = (row->predicted_class == WELD_INFERENCE_CLASS_IF) ? 1 : 0;
+
+        APPEND("%s{", (i == 0) ? "" : ",");
+        APPEND("\"predicted_class\":%d,\"pass_flag\":%d,\"fail_flag\":%d,",
+               row->predicted_class, pass_flag, fail_flag);
+        APPEND("\"label\":\"%s\",\"probability_class1\":%.9g,",
+               row->label, (double)row->probability_class1);
+
+        for (int f = 0; f < FSJ_FEATURE_COUNT; f++) {
+            APPEND("\"%s\":%.9g,", fsj_feature_name((uint32_t)f), (double)row->features[f]);
+        }
+
+        APPEND("\"uptime_ms\":%u,\"source_filename\":\"%s\",",
+               (unsigned)row->uptime_ms, row->source_filename);
+        APPEND("\"fsj_timestamp\":\"%s\",", row->fsj_timestamp);
+        APPEND("\"window_start_row\":%u,\"window_end_row\":%u,\"window_count\":%u,",
+               (unsigned)row->window_start_row, (unsigned)row->window_end_row,
+               (unsigned)row->window_count);
+        APPEND("\"parse_ms\":%u,\"features_ms\":%u",
+               (unsigned)row->parse_ms, (unsigned)row->features_ms);
+        APPEND("}");
+    }
+    APPEND("]");
+
+#undef APPEND
+
+    return pos;
 }

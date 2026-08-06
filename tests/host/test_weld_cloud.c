@@ -172,6 +172,125 @@ static void test_check_clear_force_overrides_unsent_rows(void)
     assert(unsent == 2); /* still reported, for UI/audit messaging on the override path */
 }
 
+static void test_cache_append_into_empty_slot(void)
+{
+    weld_cloud_row_t cache[4] = {0};
+    size_t count = 0;
+
+    weld_cloud_row_t row;
+    fill_test_row(&row);
+
+    weld_cloud_cache_append(cache, 4, &count, &row);
+
+    assert(count == 1);
+    assert(strcmp(cache[0].source_filename, "l060.fsj") == 0);
+}
+
+static void test_cache_append_multiple_rows_in_order(void)
+{
+    weld_cloud_row_t cache[4] = {0};
+    size_t count = 0;
+
+    for (int i = 0; i < 3; i++) {
+        weld_cloud_row_t row;
+        fill_test_row(&row);
+        snprintf(row.source_filename, sizeof(row.source_filename), "row%d.fsj", i);
+        weld_cloud_cache_append(cache, 4, &count, &row);
+    }
+
+    assert(count == 3);
+    assert(strcmp(cache[0].source_filename, "row0.fsj") == 0);
+    assert(strcmp(cache[1].source_filename, "row1.fsj") == 0);
+    assert(strcmp(cache[2].source_filename, "row2.fsj") == 0);
+}
+
+static void test_cache_append_evicts_oldest_when_full(void)
+{
+    weld_cloud_row_t cache[3] = {0};
+    size_t count = 0;
+
+    for (int i = 0; i < 4; i++) {
+        weld_cloud_row_t row;
+        fill_test_row(&row);
+        snprintf(row.source_filename, sizeof(row.source_filename), "row%d.fsj", i);
+        weld_cloud_cache_append(cache, 3, &count, &row);
+    }
+
+    /* capacity=3, 4 rows appended: row0 should have been evicted, row1..3 remain in order */
+    assert(count == 3);
+    assert(strcmp(cache[0].source_filename, "row1.fsj") == 0);
+    assert(strcmp(cache[1].source_filename, "row2.fsj") == 0);
+    assert(strcmp(cache[2].source_filename, "row3.fsj") == 0);
+}
+
+static void test_build_results_json_empty_cache(void)
+{
+    char out[64];
+    size_t n = weld_cloud_build_results_json(NULL, 0, out, sizeof(out));
+    assert(n == 0);
+}
+
+/* Same field set as EXPECTED_SINGLE_ROW_PAYLOAD, but flat (no ThingsBoard-specific
+ * ts/values wrapper) and using the raw fsj_timestamp string instead of epoch ms --
+ * this is for local display, not a ThingsBoard upload. */
+static const char *EXPECTED_SINGLE_ROW_RESULTS_JSON =
+    "[{\"predicted_class\":0,\"pass_flag\":1,\"fail_flag\":0,"
+    "\"label\":\"NP\",\"probability_class1\":0,"
+    "\"RotationSpeed\":1,\"CWT_DominantScale\":2,\"CWT_EnergyEntropy\":3,"
+    "\"CWT_MaxScaleEnergy\":4,\"CWT_MinScaleEnergy\":5,\"CWT_TotalEnergy\":6,"
+    "\"ClearanceFactor\":7,\"CrestFactor\":8,\"FFT_DominantFreq\":9,"
+    "\"FFT_FrequencyBandwidth\":10,\"FFT_SpectralCentroid\":11,"
+    "\"FFT_SpectralFlatness\":12,\"FFT_SpectralSpread\":13,\"ImpulseFactor\":14,"
+    "\"MaxForceBelow3mm\":15,\"Mean\":16,\"MinPositionStage3\":17,\"PeakValue\":18,"
+    "\"PlungeVelocity\":19,\"RMS\":20,\"ShapeFactor\":21,\"StandardDeviation\":22,"
+    "\"uptime_ms\":12345,\"source_filename\":\"l060.fsj\","
+    "\"fsj_timestamp\":\"[20/07/16 13:14:14]\","
+    "\"window_start_row\":1,\"window_end_row\":6,\"window_count\":6,"
+    "\"parse_ms\":100,\"features_ms\":200"
+    "}]";
+
+static void test_build_results_json_single_row(void)
+{
+    weld_cloud_row_t row;
+    fill_test_row(&row);
+
+    char out[2048];
+    size_t n = weld_cloud_build_results_json(&row, 1, out, sizeof(out));
+
+    assert(n == strlen(EXPECTED_SINGLE_ROW_RESULTS_JSON));
+    assert(strcmp(out, EXPECTED_SINGLE_ROW_RESULTS_JSON) == 0);
+}
+
+static void test_build_results_json_multiple_rows_no_watermark_filtering(void)
+{
+    weld_cloud_row_t rows[3];
+    for (int i = 0; i < 3; i++) {
+        fill_test_row(&rows[i]);
+        snprintf(rows[i].source_filename, sizeof(rows[i].source_filename), "row%d.fsj", i);
+    }
+
+    char out[4096];
+    size_t n = weld_cloud_build_results_json(rows, 3, out, sizeof(out));
+
+    assert(n > 0);
+    /* unlike build_payload, there's no watermark param -- everything cached is included */
+    assert(count_occurrences(out, "\"predicted_class\":") == 3);
+    assert(strstr(out, "\"row0.fsj\"") != NULL);
+    assert(strstr(out, "\"row1.fsj\"") != NULL);
+    assert(strstr(out, "\"row2.fsj\"") != NULL);
+}
+
+static void test_build_results_json_buffer_too_small(void)
+{
+    weld_cloud_row_t row;
+    fill_test_row(&row);
+
+    char out[8]; /* far too small for a real payload */
+    size_t n = weld_cloud_build_results_json(&row, 1, out, sizeof(out));
+
+    assert(n == 0);
+}
+
 int main(void)
 {
     test_parse_timestamp_valid();
@@ -184,5 +303,12 @@ int main(void)
     test_check_clear_allowed_everything_uploaded();
     test_check_clear_refused_unsent_rows();
     test_check_clear_force_overrides_unsent_rows();
+    test_cache_append_into_empty_slot();
+    test_cache_append_multiple_rows_in_order();
+    test_cache_append_evicts_oldest_when_full();
+    test_build_results_json_empty_cache();
+    test_build_results_json_single_row();
+    test_build_results_json_multiple_rows_no_watermark_filtering();
+    test_build_results_json_buffer_too_small();
     return 0;
 }

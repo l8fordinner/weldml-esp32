@@ -53,3 +53,26 @@ size_t weld_cloud_build_payload(const weld_cloud_row_t *rows, size_t row_count,
  */
 bool weld_cloud_check_clear_allowed(uint32_t watermark, size_t row_count, bool force,
                                      size_t *out_unsent_count);
+
+/*
+ * Appends new_row to rows[] (capacity slots), for weld_processor's bounded
+ * in-memory/NVS results cache (see docs/OPEN_QUESTIONS.md Q23 — incremental,
+ * never repopulated by re-reading weldml_results.csv). If already at
+ * capacity, evicts the oldest entry (shifts rows[1..capacity-1] down to
+ * rows[0..capacity-2]) before appending the new row at the end.
+ * *count tracks how many of the capacity slots are populated, capped at
+ * capacity.
+ */
+void weld_cloud_cache_append(weld_cloud_row_t *rows, size_t capacity, size_t *count,
+                              const weld_cloud_row_t *new_row);
+
+/*
+ * Builds a JSON array of all currently-cached rows (oldest first, matching
+ * cache order) for the local web UI's results-table endpoint. Unlike
+ * weld_cloud_build_payload(), this is NOT watermark-filtered — it always
+ * serializes everything currently cached. Writes into out_json (out_size
+ * bytes, NUL-terminated). Returns the number of bytes written, or 0 if
+ * there is nothing cached or the buffer was too small.
+ */
+size_t weld_cloud_build_results_json(const weld_cloud_row_t *rows, size_t row_count,
+                                      char *out_json, size_t out_size);
