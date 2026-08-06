@@ -19,3 +19,10 @@ typedef enum {
  * true Kawasaki file-close event.  5000 ms idle window used for Stage 5.
  */
 esp_err_t weld_processor_start(void);
+
+/*
+ * Registers GET /api/results (serves the in-memory results cache as JSON, see
+ * weld_processor.c) on the running web server, via webserver_register_uri().
+ * Must be called after both weld_processor_start() and webserver_start().
+ */
+esp_err_t weld_processor_register_web_endpoints(void);

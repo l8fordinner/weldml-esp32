@@ -85,6 +85,7 @@ void app_main(void)
      * rules above. */
     wifi_provision_start();
     webserver_start();
+    ESP_ERROR_CHECK(weld_processor_register_web_endpoints());
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));

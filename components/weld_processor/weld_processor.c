@@ -6,17 +6,21 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "tusb_msc_storage.h"
 #include "lcd_st7789.h"
+#include "weld_cloud.h"
 #include "weld_inference.h"
 #include "weld_parser.h"
+#include "webserver.h"
 
 static const char *TAG = "weld_proc";
 
@@ -28,6 +32,25 @@ static const char *TAG = "weld_proc";
 #define RESULT_PATH      SD_MOUNT "/weldml_result.json"
 #define RESULTS_CSV_PATH SD_MOUNT "/weldml_results.csv"
 #define MONITOR_STACK    6144
+
+/*
+ * In-memory results cache for #4 (web UI results table) and #5 (ThingsBoard upload).
+ * Incremental, never repopulated by re-reading weldml_results.csv (see
+ * docs/OPEN_QUESTIONS.md Q23) -- appended to at the same point a row is written to the
+ * CSV, evicting the oldest entry past capacity (see weld_cloud_cache_append()).
+ * Guarded by s_cache_mutex: written from the monitor_task, read from the HTTP server's
+ * task when /api/results is requested -- different FreeRTOS tasks.
+ */
+#define RESULTS_CACHE_CAPACITY 50
+static weld_cloud_row_t s_results_cache[RESULTS_CACHE_CAPACITY];
+static size_t s_results_cache_count = 0;
+static SemaphoreHandle_t s_cache_mutex = NULL;
+
+/* Generous upper bound for RESULTS_CACHE_CAPACITY rows of results JSON (~700-900 bytes/row
+ * observed; budgets for longer float representations than the test fixture uses). Heap
+ * (PSRAM-backed, see sdkconfig CONFIG_SPIRAM*) rather than stack -- too large to be safe on
+ * the HTTP server task's stack. */
+#define RESULTS_JSON_BUF_SIZE (64 * 1024)
 
 /*
  * Write-activity tracking.
@@ -152,6 +175,20 @@ static bool find_any_file(char *out_path, size_t path_len, time_t *out_mtime)
     return found;
 }
 
+/*
+ * Shared by write_result_json()/write_error_json() so both always agree on the
+ * column set -- a mismatched header vs. row field count produces a ragged CSV.
+ * 6 fixed columns + FSJ_FEATURE_COUNT features + 5 window/timing columns.
+ */
+static void write_csv_header(FILE *csv)
+{
+    fprintf(csv, "uptime_ms,source_filename,status,predicted_class,label,probability_class1");
+    for (int f = 0; f < FSJ_FEATURE_COUNT; f++) {
+        fprintf(csv, ",%s", fsj_feature_name((uint32_t)f));
+    }
+    fprintf(csv, ",window_start_row,window_end_row,window_count,parse_ms,features_ms\n");
+}
+
 static bool write_result_json(const char *src_path, time_t src_mtime,
                               const fsj_result_t *parsed,
                               const fsj_features_t *features,
@@ -233,6 +270,8 @@ static bool write_result_json(const char *src_path, time_t src_mtime,
                  src_path, RESULT_PATH, result->label,
                  (double)result->probability_class1);
 
+        uint32_t uptime_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+
         bool need_header = false;
         struct stat csv_st;
         if (stat(RESULTS_CSV_PATH, &csv_st) != 0) {
@@ -241,26 +280,42 @@ static bool write_result_json(const char *src_path, time_t src_mtime,
         FILE *csv = fopen(RESULTS_CSV_PATH, "a");
         if (csv) {
             if (need_header) {
-                fprintf(csv, "uptime_ms,source_filename,status,predicted_class,label,"
-                             "probability_class1,MinPositionStage3,FFT_FrequencyBandwidth,"
-                             "window_start_row,window_end_row,window_count,"
-                             "parse_ms,features_ms\n");
+                write_csv_header(csv);
             }
-            fprintf(csv,
-                    "%" PRIu32 ",%s,ok,%d,%s,%.6f,%.9g,%.9g,%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 "\n",
-                    (uint32_t)(esp_timer_get_time() / 1000ULL),
-                    name,
-                    result->predicted_class,
-                    result->label,
-                    (double)result->probability_class1,
-                    (double)features->values[FSJ_FEATURE_MIN_POSITION_STAGE3],
-                    (double)features->values[FSJ_FEATURE_FFT_FREQUENCY_BANDWIDTH],
-                    parsed->window_start_row,
-                    parsed->window_end_row,
-                    parsed->window_count,
+            fprintf(csv, "%" PRIu32 ",%s,ok,%d,%s,%.6f",
+                    uptime_ms, name, result->predicted_class, result->label,
+                    (double)result->probability_class1);
+            for (int f = 0; f < FSJ_FEATURE_COUNT; f++) {
+                fprintf(csv, ",%.9g", (double)features->values[f]);
+            }
+            fprintf(csv, ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 "\n",
+                    parsed->window_start_row, parsed->window_end_row, parsed->window_count,
                     parse_ms, features_ms);
             fflush(csv);
             fclose(csv);
+
+            /* Append to the in-memory results cache -- same weld-completion event as the
+             * CSV write, never repopulated from the CSV (Q23). */
+            weld_cloud_row_t cache_row = {0};
+            cache_row.uptime_ms = uptime_ms;
+            snprintf(cache_row.source_filename, sizeof(cache_row.source_filename), "%s", name);
+            snprintf(cache_row.fsj_timestamp, sizeof(cache_row.fsj_timestamp), "%s",
+                     parsed->meta.timestamp);
+            cache_row.predicted_class = result->predicted_class;
+            snprintf(cache_row.label, sizeof(cache_row.label), "%s", result->label);
+            cache_row.probability_class1 = result->probability_class1;
+            memcpy(cache_row.features, features->values, sizeof(cache_row.features));
+            cache_row.window_start_row = parsed->window_start_row;
+            cache_row.window_end_row = parsed->window_end_row;
+            cache_row.window_count = parsed->window_count;
+            cache_row.parse_ms = parse_ms;
+            cache_row.features_ms = features_ms;
+
+            if (xSemaphoreTake(s_cache_mutex, portMAX_DELAY) == pdTRUE) {
+                weld_cloud_cache_append(s_results_cache, RESULTS_CACHE_CAPACITY,
+                                         &s_results_cache_count, &cache_row);
+                xSemaphoreGive(s_cache_mutex);
+            }
         }
     }
     return ok;
@@ -316,14 +371,19 @@ static bool write_error_json(const char *src_path, time_t src_mtime,
     FILE *csv = fopen(RESULTS_CSV_PATH, "a");
     if (csv) {
         if (need_header) {
-            fprintf(csv, "uptime_ms,source_filename,status,predicted_class,label,"
-                         "probability_class1,MinPositionStage3,FFT_FrequencyBandwidth,"
-                         "window_start_row,window_end_row,window_count\n");
+            write_csv_header(csv);
         }
-        fprintf(csv, "%" PRIu32 ",%s,%s,,,,,,,\n",
+        /* Same 33-column shape as the success row (write_csv_header/write_result_json) --
+         * predicted_class/label/probability_class1 and all FSJ_FEATURE_COUNT feature
+         * columns are left empty, since there's no inference result for an error row. */
+        fprintf(csv, "%" PRIu32 ",%s,%s,,,,",
                 (uint32_t)(esp_timer_get_time() / 1000ULL),
                 name ? name : "",
                 status);
+        for (int f = 0; f < FSJ_FEATURE_COUNT; f++) {
+            fprintf(csv, ",");
+        }
+        fprintf(csv, ",,,,\n");
         fflush(csv);
         fclose(csv);
     }
@@ -455,7 +515,56 @@ esp_err_t weld_processor_start(void)
 {
     set_state(WELD_STATE_WAITING);
 
+    s_cache_mutex = xSemaphoreCreateMutex();
+    if (!s_cache_mutex) {
+        ESP_LOGE(TAG, "Failed to create results cache mutex");
+        return ESP_FAIL;
+    }
+
     BaseType_t rc = xTaskCreate(monitor_task, "weld_mon",
                                 MONITOR_STACK, NULL, 5, NULL);
     return (rc == pdPASS) ? ESP_OK : ESP_FAIL;
+}
+
+/*
+ * GET /api/results -- serves the in-memory cache as JSON for the web UI's results
+ * table (ticket #4). Runs on the HTTP server's own task, so the cache read is
+ * mutex-guarded against monitor_task's writes (see s_cache_mutex).
+ */
+static esp_err_t handler_api_results(httpd_req_t *req)
+{
+    char *buf = malloc(RESULTS_JSON_BUF_SIZE);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+
+    size_t n = 0;
+    if (xSemaphoreTake(s_cache_mutex, portMAX_DELAY) == pdTRUE) {
+        n = weld_cloud_build_results_json(s_results_cache, s_results_cache_count,
+                                           buf, RESULTS_JSON_BUF_SIZE);
+        xSemaphoreGive(s_cache_mutex);
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    if (n == 0) {
+        /* Nothing cached yet (or the buffer was somehow too small) -- an empty array
+         * is a valid response; the web UI just shows an empty table. */
+        httpd_resp_sendstr(req, "[]");
+    } else {
+        httpd_resp_send(req, buf, n);
+    }
+
+    free(buf);
+    return ESP_OK;
+}
+
+esp_err_t weld_processor_register_web_endpoints(void)
+{
+    static const httpd_uri_t s_results_uri = {
+        .uri = "/api/results",
+        .method = HTTP_GET,
+        .handler = handler_api_results,
+    };
+    return webserver_register_uri(&s_results_uri);
 }
