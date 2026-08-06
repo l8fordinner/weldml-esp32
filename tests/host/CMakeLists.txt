@@ -26,6 +26,19 @@ target_compile_definitions(test_weld_inference PRIVATE
 )
 target_link_libraries(test_weld_inference PRIVATE m)
 
+add_executable(test_weld_cloud
+    test_weld_cloud.c
+    ../../components/weld_cloud/weld_cloud.c
+    ../../components/weld_parser/weld_parser.c
+)
+target_include_directories(test_weld_cloud PRIVATE
+    ../../components/weld_parser
+    ../../components/weld_inference
+    ../../components/weld_cloud
+)
+target_link_libraries(test_weld_cloud PRIVATE m)
+
 enable_testing()
 add_test(NAME weld_parser_features COMMAND test_weld_parser_features)
 add_test(NAME weld_inference COMMAND test_weld_inference)
+add_test(NAME weld_cloud COMMAND test_weld_cloud)

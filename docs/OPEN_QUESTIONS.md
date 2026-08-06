@@ -613,6 +613,37 @@ claiming this works.
 
 ---
 
+## Q22: `weld_cloud` Payload Shape — 22-Feature Extension and Upload Timestamp Source
+
+**Question:** Found while starting TDD on `weld_cloud` (ticket #2/#5, GitHub issues #4/#5):
+`weldml_results.csv` only logs 2 of the 22 extracted features today (the 2 the Coarse Tree model
+actually uses), but the Milestone 2 upload payload is supposed to carry the full vector. Separately,
+each ThingsBoard telemetry point needs an absolute epoch-ms timestamp, and the device has no RTC
+or NTP (confirmed: no reliable network path during actual weld creation — only an ad-hoc phone
+hotspot at best, and the robot-connected network is behind a portal).
+
+**Resolved (2026-08-06):**
+- **22-feature extension, explicit and deliberate** (not scope creep — confirmed with the user):
+  `weldml_results.csv` and the in-memory cache are extended to log all 22 features, column names
+  matching `weld_parser.h`'s `fsj_feature_name()`/`FEATURE_NAMES` order. This touches the
+  closed-MVP `weld_processor` CSV schema; see the acceptance-criteria addition on GitHub issue #4.
+- **Upload timestamp comes from the `.fsj` file's own embedded timestamp**, not device uptime,
+  not NTP, not an HTTP response `Date` header. Every `.fsj` file has a `[YY/MM/DD HH:MM:SS]` line
+  right after `.FSJLOG`, already parsed into `weld_parser`'s `meta.timestamp` — confirmed via
+  direct inspection of real fixtures (`test_data/kawasaki_samples/`), cross-checked against each
+  fixture's filesystem mtime, which tracked within seconds every time.
+- **Timezone: fixed Central Standard Time (UTC−6), not DST-aware.** The robot's clock and the
+  live Wichita State deployment are both Central, confirmed by the user. A full timezone/DST
+  library is unnecessary complexity for an embedded device here — welds logged during Daylight
+  Saving months (~March–November) will show up to 1 hour off from true local time in ThingsBoard.
+  Cosmetic only: relative ordering and spacing between welds within a session is unaffected, and
+  that's what the results table and PASS/FAIL running-total widget actually depend on.
+- Implemented as `weld_cloud_parse_timestamp()` in the new `weld_cloud` component — host-tested
+  against real fixture values (not synthetic ones), independently cross-checked via
+  `TZ=UTC date -d ...`, not derived the same way the code under test computes it.
+
+---
+
 ## Resolution Log
 
 | Q | Status | Decision | Date |
@@ -638,3 +669,4 @@ claiming this works.
 | Q19 | **Resolved** | Checksum mismatch = hard abort; ESP-IDF app rollback with "healthy" = reaching weld_processor_start() in main.c. | 2026-08-06 |
 | Q20 | **Resolved** | Partition table: otadata(8K)+ota_0(3M)+ota_1(3M)+spiffs(2M), ~8.4MB of 16MB flash. | 2026-08-06 |
 | Q21 | **Resolved** | webserver_stop()/start() bracket the existing write-idle window to eliminate WiFi/HTTP CPU contention with weld_mon; priority+core-pinning as defense in depth. Not yet hardware-verified. | 2026-08-06 |
+| Q22 | **Resolved** | weld_cloud payload: extend CSV/cache to all 22 features (deliberate MVP-touching change); upload ts comes from the .fsj file's own embedded timestamp, fixed Central (UTC-6, no DST). | 2026-08-06 |
