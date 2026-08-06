@@ -481,12 +481,40 @@ the web UI shows inline status ("Uploading…" / "Uploaded N records" / "Failed:
 **Question:** Firmware never deletes `.fsj` files or trims `weldml_results.csv` today — both
 grow unbounded on the SD card. What's the policy for the new "clear old data" button?
 
-**Resolved (2026-08-05):** Delete `.fsj` source files only, keeping the most recent N (default
-N=20, tunable) — safe because results are already durably extracted into
-`weldml_results.csv` before a file would ever be deleted. `weldml_results.csv` itself is
-**not** truncated by this button — it stays the permanent local record. ThingsBoard-side data
-retention is governed separately by the tenant profile's Storage TTL setting (see Q15), not by
-this button.
+**Resolved (2026-08-05), superseded (2026-08-06):** Original decision was to delete `.fsj`
+source files, keeping the most recent N (default N=20, tunable). This is reversed: raw `.fsj`
+upload to ThingsBoard was separately ruled out (no device-initiated file/binary upload endpoint
+exists — see the payload-only decision baked into `weld_cloud_build_payload()`), which means a
+local `.fsj` file is the *only* copy of that raw weld data. Deleting it would be irreversible
+data loss with no cloud backup, so the "clear" button must never touch `.fsj` files on the SD
+card.
+
+**Resolved (2026-08-06), superseded same day:** The "clear old data" button clears the
+cached/displayed extracted results (the in-memory or cached results-table state that the local
+web UI shows — see issue #4), not the SD card. `.fsj` files and `weldml_results.csv` are both
+left untouched by this button. See Q23 for the cache-semantics clarification this decision
+depended on.
+
+**Resolved (2026-08-06):** Reversed again, same day, after clarifying the intended workflow:
+upload to ThingsBoard first, *then* clear — clearing is what makes room for the next batch of
+extracted data once it's safely in the cloud. So "clear" must actually truncate
+`weldml_results.csv` (the extracted-data record) on the SD card, not just an in-memory/web
+cache. `.fsj` source files are still never touched by this button, or by any firmware
+mechanism — they remain on the SD card until the operator manually removes them (e.g. via the
+existing SCP/SSH workflow), matching the earlier reasoning that a local `.fsj` file is the only
+copy of that raw data. Because this is now a genuine SD-card write, it must follow the same
+SD-ownership discipline as any other SD write in this project (see `CLAUDE.md`): the HTTP
+endpoint only sets a pending "clear requested" flag; the actual truncation happens inside
+`weld_processor`'s existing write-idle-triggered window, never directly from the web handler.
+Clearing also resets `weld_cloud`'s NVS-stored upload watermark (see issue #5) to 0, since the
+CSV rows it was tracking no longer exist. See Q24: clearing is gated on upload completion by
+default (refuses with an unsent-row count if the watermark hasn't caught up to the cache),
+with an explicit override for watermark-glitch cases the operator has manually verified against
+the ThingsBoard dashboard.
+`weldml_results.csv`'s existing `source_filename` column (e.g. `l037.fsj`) already
+carries the filename association for each row; no further filename tracking was requested.
+See Q23 for the results-table cache-semantics decision, still in force for #4's normal
+(non-Clear) operation.
 
 ---
 
@@ -644,6 +672,68 @@ hotspot at best, and the robot-connected network is behind a portal).
 
 ---
 
+## Q23: Results-Table Cache Semantics — Incremental vs. Re-derived from CSV
+
+**Question:** Once Q14 was resolved to mean "Clear empties the cached/displayed results table,
+never touches the SD card" (see issue #4/#6), a gap surfaced: issue #4's original spec only said
+the cache is "sourced from `weldml_results.csv`," without saying whether that means the cache is
+periodically re-derived from the CSV's most-recent-N rows, or built up incrementally and
+independently of it. The distinction matters because it decides whether Clear is meaningful:
+if the cache is re-derived from the CSV each write-idle window, Clear would be purely cosmetic
+— the table would repopulate with the same historical rows on the very next weld cycle, since
+the CSV itself is (by Q14) never touched.
+
+**Resolved (2026-08-06):** The cache is incremental and independent of `weldml_results.csv`'s
+history. Each row is appended to the in-memory/NVS cache at the same point a row is already
+written to the CSV (same weld-completion event) — the cache is never populated or refreshed by
+reading back old rows from the CSV file. Logged as an acceptance-criteria addition on GitHub
+issue #4.
+
+**Note (2026-08-06):** Q14 was reversed again the same day — Clear now truncates
+`weldml_results.csv` itself, not just this cache (see Q14's final resolution and Q24). This
+paragraph's original claim that "the CSV keeps growing underneath, untouched" by Clear no
+longer holds; it still describes correctly how the cache behaves during normal (non-Clear)
+operation — incremental, never re-derived from the CSV. Clear now resets the cache and
+truncates the CSV together, in the same write-idle-window operation.
+
+---
+
+## Q24: Clear Button — Gated on Upload Completion, or Unconditional?
+
+**Question:** Given Q14's final resolution (Clear truncates `weldml_results.csv` after the
+operator has presumably already uploaded via #5), should Clear verify/require that all cached
+rows have actually been uploaded to ThingsBoard before truncating, or should it be a simple,
+unconditional "clear everything now" button that trusts the operator to click Upload first?
+Clearing before uploading would lose that batch's extracted data permanently (the `.fsj` source
+remains, but nothing in this codebase re-processes an already-seen `.fsj` file on demand).
+
+**Resolved (2026-08-06), superseded same day — agent default was wrong:** Originally set to
+unconditional (no gate), reasoning that #6 was scoped independent of #5. User corrected this:
+Clear must track upload state and warn/refuse when there's unsent data, not silently trust the
+operator's click order.
+
+**Resolved (2026-08-06):** Gated, with an explicit override. Clear compares `weld_cloud`'s NVS
+watermark against the current cache row count:
+- If `watermark == cache_row_count` (everything cached has been uploaded), Clear proceeds
+  normally — truncate CSV, clear cache, reset watermark (see Q14).
+- If `watermark < cache_row_count` (unsent rows present), Clear **refuses by default** and
+  reports how many rows are unsent, so the operator can upload first or wait.
+- An explicit **override** is available for the case where the watermark itself is wrong — e.g.
+  a glitch where the upload actually succeeded on ThingsBoard but the watermark update didn't
+  land locally. The operator confirms this by manually checking the ThingsBoard dashboard
+  (firmware does not query ThingsBoard to cross-check; that would need read-back/auth
+  infrastructure this project doesn't have and wasn't asked for). Override is a distinct,
+  explicit action — never the default path — so an operator can't clear unsent data by reflexively
+  clicking through a warning.
+
+This changes issue #6's mechanics but not its Blocked-by relationship to #4 — #6 now needs
+read access to `weld_cloud`'s watermark (from #5's NVS state) as well, which is a data
+dependency, not a build-order/GitHub blocking dependency, since #5 and #6 can still be
+implemented in either order; #6 just can't be *exercised* end-to-end without #5's watermark
+existing.
+
+---
+
 ## Resolution Log
 
 | Q | Status | Decision | Date |
@@ -661,7 +751,7 @@ hotspot at best, and the robot-connected network is behind a portal).
 | Q11 | **Resolved** | New Milestone 2 unlocked (WiFi + webserver + ThingsBoard upload); MVP scope stays closed. Brand-fork separation from base template explicitly waived — ThingsBoard code lives directly in weldml-esp32. | 2026-08-05 |
 | Q12 | **Resolved** | Webserver never touches SD directly; weld_processor caches results + honors delete requests only during the existing Q3 write-idle-triggered window. No new SD ownership states. | 2026-08-05 |
 | Q13 | **Resolved** | ThingsBoard HTTP(S) Device API (not MQTT) via esp_http_client + esp_crt_bundle; structured results only (not raw .fsj); manual batch upload with NVS watermark. | 2026-08-05 |
-| Q14 | **Resolved** | "Clear old data" deletes .fsj files only, keeps most recent N=20 (tunable); weldml_results.csv is never truncated by this button. | 2026-08-05 |
+| Q14 | **Resolved** | "Clear" truncates weldml_results.csv (extracted-data record) on SD, via pending-flag + write-idle window; resets weld_cloud's upload watermark. Never touches .fsj files (manual removal only). Went through two intermediate reversals same day — see Q14 body for full history. | 2026-08-06 |
 | Q15 | **Resolved** | Dedicated ThingsBoard tenant profile (not `default`) with containment limits, against breach/runaway-device risk. Exact values in docs/THINGSBOARD_SETUP.md. | 2026-08-05 |
 | Q16 | **Resolved** | New Milestone 3 (OTA), scoped after Milestone 2. BLE dropped entirely — SoftAP-fallback already solves provisioning. | 2026-08-06 |
 | Q17 | **Resolved** | ThingsBoard OTA packages over plain HTTPS (no MQTT); manual button-triggered; update-check runs once per /ota page load. | 2026-08-06 |
@@ -670,3 +760,5 @@ hotspot at best, and the robot-connected network is behind a portal).
 | Q20 | **Resolved** | Partition table: otadata(8K)+ota_0(3M)+ota_1(3M)+spiffs(2M), ~8.4MB of 16MB flash. | 2026-08-06 |
 | Q21 | **Resolved** | webserver_stop()/start() bracket the existing write-idle window to eliminate WiFi/HTTP CPU contention with weld_mon; priority+core-pinning as defense in depth. Not yet hardware-verified. | 2026-08-06 |
 | Q22 | **Resolved** | weld_cloud payload: extend CSV/cache to all 22 features (deliberate MVP-touching change); upload ts comes from the .fsj file's own embedded timestamp, fixed Central (UTC-6, no DST). | 2026-08-06 |
+| Q23 | **Resolved** | Results-table cache (issue #4) is incremental, never re-derived from weldml_results.csv history, during normal operation. Clear (issue #6) now truncates the CSV directly too — see Q14/Q24. | 2026-08-06 |
+| Q24 | **Resolved** | Clear is gated: refuses by default if watermark < cache row count (unsent data present), reports the unsent count; explicit override available for watermark-glitch cases the operator has manually verified against the ThingsBoard dashboard. | 2026-08-06 |
