@@ -310,6 +310,37 @@ unverified — no `.fsj` file was processed with WiFi/webserver active during th
 
 ---
 
+## Milestone 2 Ticket #4 — Results Cache + `GET /api/results` (2026-08-06)
+
+**Change:** `weld_processor` now maintains a mutex-guarded, 50-entry in-memory results
+cache (`weld_cloud_cache_append()`), appended to at the same point a row is written to
+`weldml_results.csv` — never repopulated by re-reading the CSV (Q23). A new `GET
+/api/results` endpoint, registered via #3's `webserver_register_uri()` hook, serves the
+cache as JSON (`weld_cloud_build_results_json()`) on the HTTP server's own task, mutex-
+guarded against the monitor task's concurrent writes. Also extends `weldml_results.csv`
+and the cache from 2 to all 22 extracted features (Q22's acceptance-criteria addition on
+issue #4) — `write_result_json()` and `write_error_json()` now share a single
+`write_csv_header()` so the header and every row always agree on the 33-column shape.
+
+**Hardware test (Waveshare ESP32-S3-LCD-1.47, Pi workbench SLOT3, via the workbench
+WiFi-testing portal at `192.168.1.43:8080`):**
+
+| Test | Result | Notes |
+|------|--------|-------|
+| Build (`idf.py -D BOARD=waveshare-esp32-s3-lcd-147 build`), full clean rebuild | PASS | Zero errors/warnings |
+| Flash (all 5 binaries incl. spiffs) | PASS | SHA hash verified; Key2 press required to boot (same known quirk) |
+| `GET /api/results` on fresh boot (empty cache) | PASS | Returned `[]` |
+| Real weld cycle (`l060.fsj`, LOOCV/NP fixture, copied to SD via Pi mount/cp/sync/umount) appears via `GET /api/results` **without touching the LCD** | PASS | `predicted_class:0`, `label:"NP"`, `FFT_FrequencyBandwidth:33.1813202`, `MinPositionStage3:1.86000001`, `window_count:1854` — exact match to this fixture's previously-verified values (see the 2026-07-23 Performance Investigation section above). All 22 features present in the JSON, not just 2 |
+| `weldml_results.csv` on the SD card reflects the same 22-feature row, 33 columns matching the new header shape | PASS | Verified via `cat` over SSH after read-only mount. (The file's own header line is stale — 11/13 columns, written once long ago when the file was first created under an older schema; this append-only file never rewrites its header. Not a regression — a future Clear/truncate, per Q14, will produce a fresh correctly-shaped header.) |
+| Cache accumulates multiple rows correctly (`l046.fsj`, LOOCV/IF fixture, copied second) | PASS | `GET /api/results` returned 2 rows, oldest-first: `l060.fsj` (NP) then `l046.fsj` (IF), each with correct `predicted_class`/`label` |
+
+**Not verified this session:** cache eviction past the 50-entry capacity (only 2 rows were
+ever cached); the error-row CSV shape (`write_error_json()`'s 33-column padding) — reasoned
+about and independently verified via a Python field-count simulation before writing the C,
+but no error condition was triggered on real hardware to confirm it end-to-end.
+
+---
+
 ## Deferred to Product Fork
 
 These items are not part of the base template and do not need to be tested here:
