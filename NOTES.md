@@ -298,6 +298,7 @@ IP directly):**
 | Station-mode connect using saved NVS credentials | PASS | Workbench `STA_CONNECT` event fired with the device's real MAC (`98:3d:ae:e4:4e:ac`), assigned IP `192.168.4.15` |
 | Web UI reachable in station mode | PASS | `GET /api/status` on the station IP returned `wifi_ssid: "WeldMLTest"`, correct RSSI |
 | Factory reset (`POST /api/factory-reset`) returns device to clean state | PASS | NVS erased, rebooted, `ESP32-Setup` SoftAP confirmed broadcasting again via a final scan |
+| SoftAP fallback on *failed* station connect (not just no-credentials) | PASS | Posted credentials for a nonexistent SSID (`NoSuchNetwork-XYZ`); after the ~15s boot-time connect/retry window, `ESP32-Setup` reappeared in a scan, confirming the retry-then-fallback branch (`STA_MAX_BOOT_RETRY` exhausted → `WIFI_FAIL_BIT` → `esp_wifi_stop()` → SoftAP), not just the empty-credentials branch |
 
 **Not verified this session:** steady-state reconnect-after-drop behavior (the
 `wifi_event_handler`'s indefinite-retry path once past the boot-time decision window) —
