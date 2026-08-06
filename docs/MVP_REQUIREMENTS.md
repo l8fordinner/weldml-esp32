@@ -156,15 +156,28 @@ milestone; see "Out of Scope for MVP" below.
 
 These features are **desired for later milestones** but explicitly excluded from the MVP:
 
-- OTA firmware updates
-- MQTT / backend database upload
-- WiFi provisioning or station mode
-- Web server (config, status, OTA UI)
-- BLE provisioning
+- OTA firmware updates — **unlocked 2026-08-06 as Milestone 3, via ThingsBoard OTA packages
+  over HTTPS, manual button-triggered only; see `OPEN_QUESTIONS.md` Q16–Q21 and
+  `MILESTONE_3_REQUIREMENTS.md`**
+- MQTT / backend database upload — **unlocked 2026-08-05 as Milestone 2, but via HTTPS to
+  ThingsBoard, not MQTT; see `OPEN_QUESTIONS.md` Q11–Q15**
+- WiFi provisioning or station mode — **unlocked 2026-08-05 as Milestone 2; see
+  `OPEN_QUESTIONS.md` Q11**
+- Web server (config, status, OTA UI) — **unlocked 2026-08-05 as Milestone 2 (weld-data
+  display + upload + delete UI, not the generic config/OTA UI); see `OPEN_QUESTIONS.md` Q11–Q14**
+- BLE provisioning — considered and explicitly declined for Milestone 3 (2026-08-06): Milestone
+  2's SoftAP-fallback WiFi setup already solves provisioning, so BLE would be solving a problem
+  that doesn't exist. See `OPEN_QUESTIONS.md` Q16. Remains out of scope pending a concrete future
+  need.
 - Multi-file batch processing
-- Weld result history / logging to SD
+- Weld result history / logging to SD — the Stage 6D `weldml_results.csv` already covers this;
+  Milestone 2 adds cloud upload and local `.fsj` cleanup on top, see `OPEN_QUESTIONS.md` Q13–Q14
 - USB Mass Storage passthrough (SmrtUsbEsp mode can remain in a separate branch)
 - WS2812B RGB LED (GPIO38) status indication — LCD is the sole status output for MVP
+
+MVP scope itself (everything above this section) remains closed and unchanged — Milestone 2 is
+additive, not a reopening. See `OPEN_QUESTIONS.md` Q11–Q15 and (once written)
+`docs/MILESTONE_2_REQUIREMENTS.md` for Milestone 2's own scope definition.
 
 ---
 

@@ -408,6 +408,211 @@ Evidence:
 
 ---
 
+## Q11: Milestone 2 — Cloud Connectivity + Local Web UI for Industry 4.0 Lab
+
+**Question:** Should WeldML unlock WiFi, a local webserver, and cloud upload to ThingsBoard —
+all explicitly out of scope for the MVP (see `MVP_REQUIREMENTS.md`)?
+
+**Context:** MVP is complete and declared closed (`PROJECT_STATUS.md`, 2026-07-23). User is
+now explicitly unlocking new scope for a university Industry 4.0 lab demo: a local webserver
+that displays weld data, a manual upload button to a ThingsBoard cloud dashboard
+(`iot.mwe-inc.com`, tenant "Industry 4.0 Lab"), and a clear/delete button for old `.fsj` files.
+
+**Resolved (2026-08-05):** Yes — new **Milestone 2**. Does not reopen or amend MVP scope;
+`MVP_REQUIREMENTS.md` stays closed/historical, this is additive work layered on top.
+
+Architecture-boundary note: the sibling `esp32-base-template` repo's `REQUIREMENTS.md` states
+ThingsBoard/backend integration and branded UI belong in a separate "brand fork" tier, not the
+product repo. No brand-fork tier exists for this project — `weldml-esp32` forked directly from
+the base template. **User explicitly waived this separation**: `weldml-esp32` is the end
+product/model fork with no reuse-across-products need, so a dedicated brand-fork repo is
+overhead with no payoff here. ThingsBoard-specific code lives directly in `weldml-esp32`,
+layered on top of (not modifying) the generic `components/webserver/` and `components/app_mqtt/`
+scaffolding already present but unwired from `main.c`.
+
+---
+
+## Q12: SD Card Access for the New Webserver — Read/Delete Without Breaking MSC Exclusivity
+
+**Question:** The new webserver needs to display recent weld results and let a user delete old
+`.fsj` files. How does it do that without violating the SD ownership rule (`CLAUDE.md`: SD is
+exclusively owned by USB MSC or firmware, never both) or reopening the Q3/Q6 race conditions?
+
+**Context:** Today SD is firmware-owned only briefly, during the existing write-idle-triggered
+processing window (Q3), then handed straight back to USB MSC. A webserver reachable "any time"
+is a new access pattern Q3/Q6 were never designed for.
+
+**Options:**
+- A: Firmware caches recent results (for display) and honors a pending delete request during
+  the *existing* firmware-owned processing window only. Webserver never opens SD directly.
+- B: SD becomes permanently firmware-owned once WiFi/webserver mode is active — robot's USB MSC
+  write path stops working while this mode is on.
+- C: Webserver clicks trigger an on-demand SD ownership transition at arbitrary times.
+
+**Resolved (2026-08-05):** Option A. The webserver never touches the SD card directly.
+`weld_processor` caches recent result rows (for the display table) and checks a pending
+"delete requested" flag during the same write-idle-triggered window it already owns per Q3.
+Zero new SD ownership states; Q3/Q6's state machine is unchanged.
+
+---
+
+## Q13: Weld Data Upload Protocol — ThingsBoard Ingestion
+
+**Question:** How does the ESP32 push weld results to ThingsBoard (`iot.mwe-inc.com`) over the
+internet from a university campus network?
+
+**Context:** MQTT's default port (8883 for TLS) risks being blocked by restrictive campus
+firewalls; HTTPS (443) essentially never is. Upload is a manual batch action (button press),
+not continuous streaming, so MQTT's persistent-connection advantage isn't used anyway.
+
+**Resolved (2026-08-05):** ThingsBoard HTTP(S) Device API — ESP-IDF `esp_http_client` +
+`esp_crt_bundle` (built-in CA bundle for TLS validation), `POST
+https://iot.mwe-inc.com/api/v1/$ACCESS_TOKEN/telemetry`. `components/app_mqtt/` is **not** used
+for this feature (left scaffolded/unused for a possible future streaming use case). Only
+structured per-weld results (the 22-feature vector + PASS/FAIL, i.e. `weldml_results.csv` rows)
+are uploaded — raw `.fsj` waveform data is out of scope for upload. Batch upload uses an
+NVS-stored watermark (last-uploaded row index); on failure the watermark does not advance, and
+the web UI shows inline status ("Uploading…" / "Uploaded N records" / "Failed: <reason>").
+
+---
+
+## Q14: Local Data Retention — `.fsj` Cleanup Policy
+
+**Question:** Firmware never deletes `.fsj` files or trims `weldml_results.csv` today — both
+grow unbounded on the SD card. What's the policy for the new "clear old data" button?
+
+**Resolved (2026-08-05):** Delete `.fsj` source files only, keeping the most recent N (default
+N=20, tunable) — safe because results are already durably extracted into
+`weldml_results.csv` before a file would ever be deleted. `weldml_results.csv` itself is
+**not** truncated by this button — it stays the permanent local record. ThingsBoard-side data
+retention is governed separately by the tenant profile's Storage TTL setting (see Q15), not by
+this button.
+
+---
+
+## Q15: ThingsBoard Tenant Profile — Dedicated Profile with Containment Limits
+
+**Question:** The "Industry 4.0 Lab" tenant currently uses ThingsBoard's `default` profile
+(all entity/rate limits at `0` = unlimited). Should it get a dedicated profile instead?
+
+**Context:** User wants a dedicated profile with relatively high but non-unlimited limits, as
+containment against a security breach (e.g. leaked device credentials used to provision rogue
+devices) or a runaway/malfunctioning device (e.g. a firmware bug flooding telemetry).
+
+**Resolved (2026-08-05):** Yes — dedicated profile, not `default`. Exact numeric values are
+being verified against ThingsBoard's documented field semantics (absolute cap vs. time-windowed,
+and the rate-limit string format) before being set, to avoid picking numbers with the wrong
+units. See `docs/THINGSBOARD_SETUP.md` for the concrete values once finalized.
+
+---
+
+## Q16: Milestone 3 Scope — OTA Unlock, BLE Dropped
+
+**Question:** User asked for OTA firmware updates plus "WiFi and/or Bluetooth setup" on top of
+the already-published Milestone 2. Both OTA and BLE are explicit out-of-scope items in issue #1
+and `CLAUDE.md`'s MVP guard — does unlocking them mean folding them into Milestone 2, or scoping
+a new milestone?
+
+**Resolved (2026-08-06):** New Milestone 3, scoped and implemented after Milestone 2 (they share
+WiFi bring-up, the partition table, and `components/webserver/` — redoing that infrastructure
+twice would be wasted work). Of the two asks, only OTA is in scope. BLE is dropped entirely —
+Milestone 2 already fully specs WiFi setup via SoftAP-fallback, which already solves device
+provisioning; BLE provisioning would solve a problem that doesn't exist. See
+`MILESTONE_3_REQUIREMENTS.md`.
+
+---
+
+## Q17: OTA Delivery Mechanism
+
+**Question:** How does the device actually receive and download firmware updates?
+
+**Context:** Two real options: plain ESP-IDF HTTPS OTA against a self-hosted URL, or
+ThingsBoard's built-in OTA package distribution feature (the device is already talking to
+ThingsBoard over HTTPS for telemetry per Q13). Confirmed via ThingsBoard's current documentation
+that HTTP-transport devices (not just MQTT) are supported for OTA: shared attributes
+(`fw_title`/`fw_version`/`fw_checksum`/`fw_checksum_algorithm`) via
+`GET /api/v1/$ACCESS_TOKEN/attributes`, firmware binary via
+`GET /api/v1/$ACCESS_TOKEN/firmware?title=...&version=...` (chunk/size params optional — a
+single plain GET returns the whole image).
+
+**Resolved (2026-08-06):** ThingsBoard OTA packages over plain HTTPS, no MQTT — reuses the
+existing ThingsBoard connection rather than standing up separate firmware-hosting
+infrastructure. Manual, button-triggered only (no automatic/unattended self-update) — matches
+Milestone 2's manual-upload-button precedent. Update-availability check runs once per `/ota`
+page load (not a background poll); the web UI's Update button reads "Update available: vX.Y.Z"
+(enabled) or "Up to date" (greyed out).
+
+---
+
+## Q18: Firmware Versioning Scheme
+
+**Question:** ThingsBoard's OTA needs to compare its assigned `fw_version` against what the
+device thinks it's running — but this repo has no versioning scheme at all today (confirmed: no
+`PROJECT_VER`, no `VERSION` file, no git tags).
+
+**Resolved (2026-08-06):** ESP-IDF's built-in git-describe versioning
+(`CONFIG_APP_PROJECT_VER_FROM_GIT`) — ties every running firmware build to an actual commit,
+matching this project's existing "verified on hardware" traceability convention (`NOTES.md`
+already references specific commits per hardware test), with no new manual bookkeeping process.
+Requires adopting git tags for releases going forward.
+
+---
+
+## Q19: OTA Safety — Checksum Verification and Rollback
+
+**Question:** What happens if a downloaded firmware image is corrupt, or boots but doesn't
+actually work?
+
+**Resolved (2026-08-06):** Two independent safety layers. (1) Checksum mismatch against
+ThingsBoard's `fw_checksum`/`fw_checksum_algorithm` attributes → hard abort before the image is
+ever marked bootable; never boot known-corrupt firmware, full stop. (2) ESP-IDF app rollback
+(`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`) — a newly-flashed image stays "pending verify" until
+the app calls `esp_ota_mark_app_valid_cancel_rollback()`; "booted healthy" is defined as reaching
+the existing point in `main.c` where LCD init and SD/USB-MSC init both succeed and
+`weld_processor_start()` is called (this project's existing definition of "didn't fail" — LCD/SD
+init failure already halts and shows solid RED today). If the app never reaches that point, the
+bootloader auto-reverts to the previous good partition on next reset.
+
+---
+
+## Q20: Flash Partition Table — OTA + SPIFFS Layout
+
+**Question:** OTA needs two app partitions (`ota_0`/`ota_1`); Milestone 2 needs a `spiffs`
+partition for web UI assets. The current table has one single 3 MB `factory` app partition and
+no SPIFFS. What's the full layout?
+
+**Resolved (2026-08-06):** `otadata`(8K) + `ota_0`(3M) + `ota_1`(3M) + `spiffs`(2M), existing
+`nvs`/`phy_init` unchanged. ≈8.4 MB of 16 MB flash, leaving a comfortable margin. `ota_0`/`ota_1`
+sized to match the current single-factory-app partition's headroom (current binary ~407 KB —
+~7x growth room even after WiFi/HTTPS/webserver/OTA additions). See
+`MILESTONE_3_REQUIREMENTS.md`.
+
+---
+
+## Q21: CPU-Contention Protection — WiFi/Webserver/OTA vs. Weld Processing Timing
+
+**Question:** Does adding WiFi/webserver/OTA risk slowing down the weld-processing pipeline
+(SD parse → FFT → inference, ~6 s cycle per `NOTES.md`)?
+
+**Context:** Confirmed as a real risk, not hypothetical: `weld_mon` (the FFT/inference task),
+the scaffolded `ota_task`, and ESP-IDF's HTTP server (`HTTPD_DEFAULT_CONFIG()`) all default to
+the same FreeRTOS priority (5), and nothing in this codebase pins any task to a specific core.
+
+**Resolved (2026-08-06):** Two layers. (1) Primary: extend the existing write-idle state
+machine's exclusivity window (Q3/Q6/Q12) — call `webserver_stop()` on entering `WRITING`, and
+`webserver_start()` again once back to `WAITING`. Zero HTTP/WiFi-driven task activity can exist
+during the FFT/inference window at all. WiFi association itself stays up throughout (only the
+HTTP server stops/starts — no WiFi re-association latency). This also makes OTA impossible to
+trigger during that window for free, since it's only reachable through the web UI. Matches
+actual usage: the web UI is for viewing results and triggering upload/OTA/cleanup while idle —
+between welds or once a session is finished — not during an active write. (2) Defense in depth:
+raise `weld_mon`'s priority above the WiFi/httpd/OTA default and pin it to core 1 (WiFi's own
+internal tasks default to core 0). **Not yet hardware-verified** — the l060.fsj/l046.fsj timing
+tests must be re-run with WiFi/webserver active once implemented, and `NOTES.md` updated, before
+claiming this works.
+
+---
+
 ## Resolution Log
 
 | Q | Status | Decision | Date |
@@ -422,3 +627,14 @@ Evidence:
 | Q8 | **File format resolved; Q10 split out** | .fsj ASCII text, 16 columns, S.POS.M>=0 to last STAGE==3 defines weld window | 2026-06-20 |
 | Q9 | **Resolved** | Preferred: `POST /api/flash` (Pi-side esptool); fallback: `idf.py -p rfc2217://192.168.1.43:4003 flash` | 2026-06-19 |
 | Q10 | **Resolved — Stage 6B UNBLOCKED** | All 22 feature formulas confirmed from parse_and_clean.py: signal=raw LOADCELL, window=sposm_ge_zero to last STAGE3 inclusive, MaxForceBelow3mm=max(LOADCELL where POS7<3 AND STAGE∈[2,3]), PlungeVelocity=0.5/\|t(2.5mm)−t(3.0mm)\| in STAGE2. Parity gap explained: fixture LOADCELL values differ from training file (position-based features match exactly). | 2026-06-20 |
+| Q11 | **Resolved** | New Milestone 2 unlocked (WiFi + webserver + ThingsBoard upload); MVP scope stays closed. Brand-fork separation from base template explicitly waived — ThingsBoard code lives directly in weldml-esp32. | 2026-08-05 |
+| Q12 | **Resolved** | Webserver never touches SD directly; weld_processor caches results + honors delete requests only during the existing Q3 write-idle-triggered window. No new SD ownership states. | 2026-08-05 |
+| Q13 | **Resolved** | ThingsBoard HTTP(S) Device API (not MQTT) via esp_http_client + esp_crt_bundle; structured results only (not raw .fsj); manual batch upload with NVS watermark. | 2026-08-05 |
+| Q14 | **Resolved** | "Clear old data" deletes .fsj files only, keeps most recent N=20 (tunable); weldml_results.csv is never truncated by this button. | 2026-08-05 |
+| Q15 | **Resolved** | Dedicated ThingsBoard tenant profile (not `default`) with containment limits, against breach/runaway-device risk. Exact values in docs/THINGSBOARD_SETUP.md. | 2026-08-05 |
+| Q16 | **Resolved** | New Milestone 3 (OTA), scoped after Milestone 2. BLE dropped entirely — SoftAP-fallback already solves provisioning. | 2026-08-06 |
+| Q17 | **Resolved** | ThingsBoard OTA packages over plain HTTPS (no MQTT); manual button-triggered; update-check runs once per /ota page load. | 2026-08-06 |
+| Q18 | **Resolved** | Firmware versioning: ESP-IDF git-describe (CONFIG_APP_PROJECT_VER_FROM_GIT). | 2026-08-06 |
+| Q19 | **Resolved** | Checksum mismatch = hard abort; ESP-IDF app rollback with "healthy" = reaching weld_processor_start() in main.c. | 2026-08-06 |
+| Q20 | **Resolved** | Partition table: otadata(8K)+ota_0(3M)+ota_1(3M)+spiffs(2M), ~8.4MB of 16MB flash. | 2026-08-06 |
+| Q21 | **Resolved** | webserver_stop()/start() bracket the existing write-idle window to eliminate WiFi/HTTP CPU contention with weld_mon; priority+core-pinning as defense in depth. Not yet hardware-verified. | 2026-08-06 |
