@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
 
@@ -41,3 +42,14 @@ size_t weld_cloud_build_payload(const weld_cloud_row_t *rows, size_t row_count,
                                  uint32_t watermark,
                                  char *out_json, size_t out_size,
                                  uint32_t *out_new_watermark);
+
+/*
+ * Determines whether a Clear operation is allowed, per docs/OPEN_QUESTIONS.md Q24.
+ * watermark/row_count come from weld_cloud's upload state and the results cache.
+ * If force is false and watermark < row_count (unsent rows present), clear is
+ * refused and *out_unsent_count reports how many rows are unsent.
+ * If force is true, or watermark >= row_count, clear is allowed.
+ * Returns true if the caller should proceed with clearing, false if refused.
+ */
+bool weld_cloud_check_clear_allowed(uint32_t watermark, size_t row_count, bool force,
+                                     size_t *out_unsent_count);

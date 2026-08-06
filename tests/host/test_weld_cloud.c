@@ -143,6 +143,35 @@ static void test_build_payload_buffer_too_small(void)
     assert(new_watermark == 999);
 }
 
+static void test_check_clear_allowed_everything_uploaded(void)
+{
+    size_t unsent = 999; /* sentinel — must be set to 0 on the allowed path */
+    bool allowed = weld_cloud_check_clear_allowed(3, 3, false, &unsent);
+
+    assert(allowed == true);
+    assert(unsent == 0);
+}
+
+static void test_check_clear_refused_unsent_rows(void)
+{
+    size_t unsent = 999;
+    /* watermark=1: only row0 uploaded, rows 1 and 2 are unsent */
+    bool allowed = weld_cloud_check_clear_allowed(1, 3, false, &unsent);
+
+    assert(allowed == false);
+    assert(unsent == 2);
+}
+
+static void test_check_clear_force_overrides_unsent_rows(void)
+{
+    size_t unsent = 999;
+    /* watermark=1, row_count=3: 2 unsent, but force=true should override the refusal */
+    bool allowed = weld_cloud_check_clear_allowed(1, 3, true, &unsent);
+
+    assert(allowed == true);
+    assert(unsent == 2); /* still reported, for UI/audit messaging on the override path */
+}
+
 int main(void)
 {
     test_parse_timestamp_valid();
@@ -152,5 +181,8 @@ int main(void)
     test_build_payload_single_row();
     test_build_payload_respects_watermark();
     test_build_payload_buffer_too_small();
+    test_check_clear_allowed_everything_uploaded();
+    test_check_clear_refused_unsent_rows();
+    test_check_clear_force_overrides_unsent_rows();
     return 0;
 }

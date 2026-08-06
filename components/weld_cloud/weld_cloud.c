@@ -111,3 +111,15 @@ size_t weld_cloud_build_payload(const weld_cloud_row_t *rows, size_t row_count,
     *out_new_watermark = (uint32_t)row_count;
     return pos;
 }
+
+bool weld_cloud_check_clear_allowed(uint32_t watermark, size_t row_count, bool force,
+                                     size_t *out_unsent_count)
+{
+    if (watermark < row_count) {
+        *out_unsent_count = row_count - watermark;
+        return force;
+    }
+
+    *out_unsent_count = 0;
+    return true;
+}
