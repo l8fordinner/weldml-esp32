@@ -60,14 +60,14 @@ menu "ESP32 Base Template Config"
 
     config WIFI_AP_SSID
         string "Setup AP SSID"
-        default "ESP32-Setup"
+        default "weldml-esp32_1"
         help
             SSID of the SoftAP broadcast when no WiFi credentials are configured.
             Connect your phone to this network to reach the setup UI at 192.168.4.1.
 
     config WIFI_AP_PASSWORD
         string "Setup AP Password"
-        default ""
+        default "indu$try"
         help
             Password for the setup AP. Leave empty for an open network (easier
             for first-run setup). Set a password if the deployment environment
