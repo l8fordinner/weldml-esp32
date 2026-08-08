@@ -28,6 +28,18 @@
 static const char *TAG = "weld_proc";
 
 #define IDLE_WINDOW_MS   5000
+/*
+ * Ticket #9 -- CPU-contention protection, defense-in-depth layer. weld_mon's
+ * priority is raised above WiFi/httpd/OTA's default (5, tskIDLE_PRIORITY+5 --
+ * see HTTPD_DEFAULT_CONFIG() and ota.c's ota_task), so a request already in
+ * flight at the moment the web server is stopped (see enter_sd_window()
+ * below) can't delay the processing window. Pinned to core 1: WiFi's
+ * internal task is pinned to core 0 (CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0),
+ * and this matches TinyUSB's own task affinity (CONFIG_TINYUSB_TASK_AFFINITY_CPU1),
+ * keeping all storage-path work off WiFi's core.
+ */
+#define WELD_MON_PRIORITY 10
+#define WELD_MON_CORE     1
 #define LCD_TEXT_SCALE   7  /* rotated text runs along the 320px long axis; 7 is the largest
                              * integer scale that fits the longest label (WRITING/PROCESS,
                              * 7 chars) within that axis: 7*(6*7-1)=287 <= 320 */
@@ -93,6 +105,20 @@ static volatile bool     s_write_seen    = false;
  * process_clear().
  */
 static volatile bool s_clear_pending = false;
+
+/*
+ * Ticket #9. Set around handler_api_upload()'s esp_http_client_perform() call
+ * (HTTP server task) -- the only genuinely slow span in any handler, up to
+ * esp_http_client's own 15s timeout. Read by monitor_task (app task) before
+ * calling webserver_stop(): httpd_stop() busy-waits with no timeout of its
+ * own until the (single, synchronous) httpd task thread exits, so a stop
+ * issued while a handler is mid-flight blocks the caller for however long
+ * that handler takes. Waiting here first makes that delay explicit, bounded,
+ * and logged instead of an opaque stall inside httpd_stop(). Same
+ * single-writer-then-read atomic-bool pattern as s_write_seen/s_clear_pending
+ * above.
+ */
+static volatile bool s_upload_in_progress = false;
 
 static weld_state_t s_state = WELD_STATE_WAITING;
 
@@ -563,6 +589,46 @@ static void process_clear(void)
     ESP_LOGI(TAG, "Clear complete — cache emptied, upload watermark reset");
 }
 
+/*
+ * Ticket #9 -- CPU-contention protection, primary layer. Brackets the same
+ * SD-ownership window process_sd()/process_clear() already use: stops the HTTP
+ * server (and its worker task) for the full duration, guaranteeing zero
+ * WiFi/HTTP-driven task activity during the weld-processing pipeline's timing-
+ * critical window, then restarts it once back to idle. Also makes OTA
+ * unreachable during that window for free, since it's only triggerable via the
+ * web UI. webserver_stop() unregisters SPIFFS along with the HTTP server, so
+ * webserver_start() alone isn't enough coming back out -- weld_processor's own
+ * endpoints (registered separately via webserver_register_uri()) need
+ * re-registering each time too.
+ */
+static void enter_sd_window(void)
+{
+    /* See s_upload_in_progress's comment: wait for a mid-flight upload to finish
+     * first, bounded to esp_http_client's own 15s timeout plus margin, so this
+     * can never hang forever. */
+    const uint32_t max_wait_ms = 16000;
+    uint32_t waited_ms = 0;
+    while (s_upload_in_progress && waited_ms < max_wait_ms) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        waited_ms += 100;
+    }
+    if (s_upload_in_progress) {
+        ESP_LOGW(TAG, "Entering SD window with an upload still in flight after %" PRIu32 " ms wait",
+                 waited_ms);
+    }
+    webserver_stop();
+}
+
+static void exit_sd_window(void)
+{
+    webserver_start();
+    esp_err_t err = weld_processor_register_web_endpoints();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to re-register web endpoints after SD window: %s",
+                 esp_err_to_name(err));
+    }
+}
+
 static void monitor_task(void *arg)
 {
     ESP_LOGI(TAG, "Write-idle monitor started — idle window: %d ms", IDLE_WINDOW_MS);
@@ -572,8 +638,10 @@ static void monitor_task(void *arg)
 
         if (!s_write_seen) {
             if (s_clear_pending) {
+                enter_sd_window();
                 process_clear();
                 s_clear_pending = false;
+                exit_sd_window();
             }
             continue;
         }
@@ -587,11 +655,13 @@ static void monitor_task(void *arg)
             }
         } else {
             /* Idle window elapsed — take SD ownership and process. */
+            enter_sd_window();
             process_sd();
             if (s_clear_pending) {
                 process_clear();
                 s_clear_pending = false;
             }
+            exit_sd_window();
             s_write_seen = false;
             /* LCD is now GREEN (success) or RED (failure). */
         }
@@ -608,8 +678,9 @@ esp_err_t weld_processor_start(void)
         return ESP_FAIL;
     }
 
-    BaseType_t rc = xTaskCreate(monitor_task, "weld_mon",
-                                MONITOR_STACK, NULL, 5, NULL);
+    BaseType_t rc = xTaskCreatePinnedToCore(monitor_task, "weld_mon",
+                                             MONITOR_STACK, NULL, WELD_MON_PRIORITY,
+                                             NULL, WELD_MON_CORE);
     return (rc == pdPASS) ? ESP_OK : ESP_FAIL;
 }
 
@@ -736,7 +807,9 @@ static esp_err_t handler_api_upload(httpd_req_t *req)
     esp_http_client_set_header(client, "Content-Type", "application/json");
     esp_http_client_set_post_field(client, buf, (int)n);
 
+    s_upload_in_progress = true;
     esp_err_t err = esp_http_client_perform(client);
+    s_upload_in_progress = false;
     int status = (err == ESP_OK) ? esp_http_client_get_status_code(client) : 0;
     esp_http_client_cleanup(client);
     free(buf);
