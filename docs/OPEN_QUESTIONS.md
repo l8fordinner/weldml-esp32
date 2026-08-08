@@ -578,11 +578,25 @@ page load (not a background poll); the web UI's Update button reads "Update avai
 device thinks it's running — but this repo has no versioning scheme at all today (confirmed: no
 `PROJECT_VER`, no `VERSION` file, no git tags).
 
-**Resolved (2026-08-06):** ESP-IDF's built-in git-describe versioning
-(`CONFIG_APP_PROJECT_VER_FROM_GIT`) — ties every running firmware build to an actual commit,
-matching this project's existing "verified on hardware" traceability convention (`NOTES.md`
-already references specific commits per hardware test), with no new manual bookkeeping process.
-Requires adopting git tags for releases going forward.
+**Resolved (2026-08-06):** ESP-IDF's built-in git-describe versioning — ties every running
+firmware build to an actual commit, matching this project's existing "verified on hardware"
+traceability convention (`NOTES.md` already references specific commits per hardware test),
+with no new manual bookkeeping process. Requires adopting git tags for releases going forward.
+
+**Correction (2026-08-08, ticket #8):** there is no `CONFIG_APP_PROJECT_VER_FROM_GIT` Kconfig
+option in this ESP-IDF version (5.3) — confirmed by grepping `esp_app_format/Kconfig.projbuild`.
+The actual mechanism is automatic: ESP-IDF's `project.cmake` falls back to running `git describe`
+for `PROJECT_VER` whenever `CONFIG_APP_PROJECT_VER_FROM_CONFIG` is unset (the default) and no
+`version.txt`/explicit `PROJECT_VER` is set — nothing to enable, it's already been in effect
+since this repo's first build (confirmed: recent builds already show versions like
+`e05853e-dirty`). The only actually-missing piece was the tag convention itself:
+
+**Git-tag-per-release convention:** tag the exact commit being flashed to a device as
+`vMAJOR.MINOR.PATCH` (e.g. `v1.0.0`) at release time, using an annotated tag (`git tag -a
+v1.0.0 -m "..."`) so `git describe` resolves cleanly to that tag on an exact match, or
+`v1.0.0-N-gHASH[-dirty]` for commits after a tag. No tags exist yet as of this ticket — the
+first one should be cut once Milestone 3 (OTA) itself is ready to ship, so the convention has a
+real release to anchor to rather than an arbitrary point mid-development.
 
 ---
 

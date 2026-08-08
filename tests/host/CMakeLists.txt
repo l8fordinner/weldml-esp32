@@ -38,7 +38,16 @@ target_include_directories(test_weld_cloud PRIVATE
 )
 target_link_libraries(test_weld_cloud PRIVATE m)
 
+add_executable(test_ota_policy
+    test_ota_policy.c
+    ../../components/ota_policy/ota_policy.c
+)
+target_include_directories(test_ota_policy PRIVATE
+    ../../components/ota_policy
+)
+
 enable_testing()
 add_test(NAME weld_parser_features COMMAND test_weld_parser_features)
 add_test(NAME weld_inference COMMAND test_weld_inference)
 add_test(NAME weld_cloud COMMAND test_weld_cloud)
+add_test(NAME ota_policy COMMAND test_ota_policy)

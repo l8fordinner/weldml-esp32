@@ -10,4 +10,5 @@ idf_component_register(
         esp_timer
         ota
         wifi_provision
+        esp_app_format
 )

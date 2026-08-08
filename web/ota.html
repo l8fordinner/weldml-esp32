@@ -21,16 +21,41 @@
 <div class="card">
   <h2>Firmware Update (OTA)</h2>
   <p style="margin-bottom:1rem; font-size:0.9rem; color:var(--muted);">
-    Triggers a firmware pull from the configured HTTPS URL.
-    The device will reboot automatically after a successful update.
+    Checked once when this page loads — not a background poll.
   </p>
-  <button id="ota-btn">Start OTA Update</button>
+  <p id="version-info" class="muted" style="margin-bottom:0.75rem; font-size:0.85rem;">Checking…</p>
+  <button id="ota-btn" disabled>Start OTA Update</button>
   <p id="status-msg"></p>
 </div>
 
 <script src="/app.js"></script>
 <script>
 let polling = false;
+
+async function checkForUpdate() {
+  const info = document.getElementById('version-info');
+  const btn = document.getElementById('ota-btn');
+  try {
+    const res = await (await fetch('/api/ota/check')).json();
+    if (!res.ok) {
+      info.textContent = 'Could not check for updates (no server access token configured, or the check failed).';
+      btn.disabled = true;
+      btn.textContent = 'Start OTA Update';
+      return;
+    }
+    info.textContent = `Running: ${res.current}`;
+    if (res.update_available) {
+      btn.textContent = `Update available: ${res.advertised}`;
+      btn.disabled = false;
+    } else {
+      btn.textContent = 'Up to date';
+      btn.disabled = true;
+    }
+  } catch (err) {
+    info.textContent = 'Could not check for updates: ' + err.message;
+    btn.disabled = true;
+  }
+}
 
 document.getElementById('ota-btn').addEventListener('click', async () => {
   document.getElementById('ota-btn').disabled = true;
@@ -68,6 +93,8 @@ function startPolling() {
     } catch (_) { /* device may be rebooting */ }
   }, 2000);
 }
+
+checkForUpdate();
 </script>
 </body>
 </html>

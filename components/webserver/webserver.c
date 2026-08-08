@@ -20,6 +20,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "esp_spiffs.h"
@@ -28,6 +29,7 @@
 #include "nvs.h"
 #include "esp_wifi.h"
 #include "esp_system.h"
+#include "ota.h"
 #include "webserver.h"
 #include "wifi_provision.h"
 
@@ -306,6 +308,31 @@ static esp_err_t handler_api_ota(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ── API: GET /api/ota/check ─────────────────────────────────────────────── */
+
+/* Version-check (ticket #8) -- fetches ThingsBoard's advertised fw_version
+   and compares it against the running firmware. Run once per /ota page
+   load, not polled. */
+static esp_err_t handler_api_ota_check(httpd_req_t *req)
+{
+    char advertised[128] = {0};
+    bool available = false;
+    bool ok = ota_check_update(advertised, sizeof(advertised), &available);
+
+    httpd_resp_set_type(req, "application/json");
+    char resp[256];
+    if (!ok) {
+        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"check failed\"}");
+        return ESP_OK;
+    }
+    const esp_app_desc_t *app_desc = esp_app_get_description();
+    snprintf(resp, sizeof(resp),
+             "{\"ok\":true,\"current\":\"%s\",\"advertised\":\"%s\",\"update_available\":%s}",
+             app_desc->version, advertised, available ? "true" : "false");
+    httpd_resp_sendstr(req, resp);
+    return ESP_OK;
+}
+
 /* ── URI table ───────────────────────────────────────────────────────────── */
 
 static const httpd_uri_t s_uris[] = {
@@ -322,6 +349,7 @@ static const httpd_uri_t s_uris[] = {
     { .uri = "/api/factory-reset", .method = HTTP_POST, .handler = handler_api_factory_reset },
     { .uri = "/api/config",  .method = HTTP_POST, .handler = handler_api_config },
     { .uri = "/api/ota",     .method = HTTP_POST, .handler = handler_api_ota    },
+    { .uri = "/api/ota/check", .method = HTTP_GET, .handler = handler_api_ota_check },
 };
 
 /* ── Public API ──────────────────────────────────────────────────────────── */
@@ -331,10 +359,10 @@ void webserver_start(void)
     spiffs_init();
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    /* 13 built-in URIs (s_uris below) + 4 slots for product-specific endpoints
+    /* 14 built-in URIs (s_uris below) + 4 slots for product-specific endpoints
      * registered via webserver_register_uri(): GET /results, GET /api/results,
      * POST /api/upload (tickets #4/#5), POST /api/clear (ticket #6, upcoming). */
-    config.max_uri_handlers = 17;
+    config.max_uri_handlers = 18;
     /* Default worker stack (4096) is too small for POST /api/upload's synchronous
      * esp_http_client + esp_crt_bundle_attach TLS handshake -- mbedTLS's handshake
      * and cert-bundle parsing routinely exceed that, causing a stack-overflow
