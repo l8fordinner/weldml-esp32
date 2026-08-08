@@ -17,9 +17,11 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_ota_ops.h"
 #include "esp_system.h"
 #include "nvs_flash.h"
 #include "lcd_st7789.h"
+#include "ota.h"
 #include "usb_msc_sd.h"
 #include "weld_processor.h"
 #include "webserver.h"
@@ -74,6 +76,15 @@ void app_main(void)
         }
     }
 
+    /* Ticket #10 -- app-rollback confirmation (docs/OPEN_QUESTIONS.md Q19).
+     * "Booted healthy" is defined as reaching this exact point: LCD init and
+     * SD/USB-MSC init both succeeded (the same condition that already halts
+     * with solid RED on failure, above). A pending (newly-flashed via OTA,
+     * unconfirmed) image that never reaches this point gets auto-reverted by
+     * the bootloader on the next reset. No-op if rollback isn't pending
+     * (e.g. a normal boot, not one following an OTA flash). */
+    esp_ota_mark_app_valid_cancel_rollback();
+
     /* Start write-idle monitor. LCD transitions to CYAN (waiting) inside here.
      * Runs on its own task, so the WiFi/webserver bring-up below (which can
      * block for several seconds during a failed station connect attempt)
@@ -86,6 +97,7 @@ void app_main(void)
     wifi_provision_start();
     webserver_start();
     ESP_ERROR_CHECK(weld_processor_register_web_endpoints());
+    ota_init();
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));

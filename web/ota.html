@@ -82,16 +82,20 @@ function startPolling() {
     try {
       const res = await fetch('/api/status');
       const data = await res.json();
-      if (data.ota_status === 'success') {
+      if (data.ota_status === 'downloading') {
+        showStatus('Downloading…', '');
+      } else if (data.ota_status === 'verifying') {
+        showStatus('Verifying…', '');
+      } else if (data.ota_status === 'success') {
         clearInterval(iv);
-        showStatus('Update successful — device rebooting.', 'ok');
+        showStatus('Success — rebooting', 'ok');
       } else if (data.ota_status === 'failed') {
         clearInterval(iv);
-        showStatus('OTA failed. Check the firmware URL and try again.', 'error');
+        showStatus('Failed: ' + (data.ota_reason || 'unknown error'), 'error');
         document.getElementById('ota-btn').disabled = false;
       }
     } catch (_) { /* device may be rebooting */ }
-  }, 2000);
+  }, 1500);
 }
 
 checkForUpdate();

@@ -14,4 +14,5 @@ idf_component_register(
         esp_http_client
         mbedtls
         nvs_flash
+        ota
 )

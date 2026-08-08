@@ -24,6 +24,7 @@
 #include "weld_inference.h"
 #include "weld_parser.h"
 #include "webserver.h"
+#include "ota.h"
 
 static const char *TAG = "weld_proc";
 
@@ -637,6 +638,7 @@ static void monitor_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(250));
 
         if (!s_write_seen) {
+            g_weld_write_active = false;
             if (s_clear_pending) {
                 enter_sd_window();
                 process_clear();
@@ -650,11 +652,13 @@ static void monitor_task(void *arg)
         uint32_t age_ms = now_ms - s_last_write_ms;
 
         if (age_ms < IDLE_WINDOW_MS) {
+            g_weld_write_active = true;
             if (s_state != WELD_STATE_WRITING) {
                 set_state(WELD_STATE_WRITING);
             }
         } else {
             /* Idle window elapsed — take SD ownership and process. */
+            g_weld_write_active = false;
             enter_sd_window();
             process_sd();
             if (s_clear_pending) {

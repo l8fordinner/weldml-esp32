@@ -117,18 +117,22 @@ static esp_err_t handler_api_status(httpd_req_t *req)
     wifi_ap_record_t ap_info = {0};
     esp_wifi_sta_get_ap_info(&ap_info);
 
-    char json[512];
+    char json[640];
     snprintf(json, sizeof(json),
              "{\"idf_version\":\"%s\","
              "\"free_heap\":%lu,"
              "\"uptime_ms\":%llu,"
              "\"wifi_rssi\":%d,"
-             "\"wifi_ssid\":\"%s\"}",
+             "\"wifi_ssid\":\"%s\","
+             "\"ota_status\":\"%s\","
+             "\"ota_reason\":\"%s\"}",
              esp_get_idf_version(),
              (unsigned long)esp_get_free_heap_size(),
              (unsigned long long)(esp_timer_get_time() / 1000),
              ap_info.rssi,
-             (char *)ap_info.ssid);
+             (char *)ap_info.ssid,
+             ota_status_str(),
+             ota_status_reason());
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, json);

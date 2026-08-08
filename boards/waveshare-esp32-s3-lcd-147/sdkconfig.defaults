@@ -17,6 +17,14 @@ CONFIG_BOARD_HAS_ZIGBEE=n
 # Partition table — OTA-capable (ota_0/ota_1) + SPIFFS, per docs/OPEN_QUESTIONS.md Q20
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="boards/waveshare-esp32-s3-lcd-147/partitions.csv"
 
+# App rollback — ticket #10 (Milestone 3 OTA safety), per docs/OPEN_QUESTIONS.md Q19.
+# A newly-flashed OTA image stays "pending verify" until main.c calls
+# esp_ota_mark_app_valid_cancel_rollback(); if it never reaches that point, the
+# bootloader auto-reverts to the previous working partition on the next reset.
+# (CONFIG_APP_ROLLBACK_ENABLE is this option's old pre-rename name -- setting
+# both is redundant, IDF 5.3's sdkconfig.rename folds it into the same symbol.)
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
 # Flash — 16MB, overrides root 4MB default (required before OTA expansion or SPIFFS > 4MB)
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
