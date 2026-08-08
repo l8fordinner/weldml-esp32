@@ -32,6 +32,85 @@ not MVP completion. See the handoff below for the final verification session.
 
 ---
 
+## Session Handoff — 2026-08-07 (Tickets #3/#4 hardware-verified and closed this session; #4 UI gap found and fixed; #5 upload glue built; wifi_provision rewritten for extended-outage SoftAP fallback; NOT hardware-verified — awaiting boot confirmation)
+
+**Branch:** `main`
+**Last commit:** `dceb48f` — wifi_provision: SoftAP fallback on extended outage, not just boot failure
+**Working tree:** CLEAN (untracked `docs/agents/`, `test_data/` — pre-existing, unrelated)
+**Pushed:** yes, `dceb48f` is on `origin/main`
+
+### Original ask
+
+Continuation from a prior handoff-resume. This session's asks, roughly in order: (1) resolve the still-open Clear-button design from the prior session (Q14/Q23/Q24), (2) `tdd` on issue #6's gating logic, (3) `tdd 5` — start ticket #5 (Upload to ThingsBoard) test-first, (4) after discovering #5's pure-logic side was already built, user approved skipping straight to implementation, (5) mid-implementation, user asked to rename the SoftAP SSID to `weldml-esp32_1` and add a password `indu$try`, (6) after that flash, user asked a pointed question — does the device revert to SoftAP when WiFi is lost *during normal operation*, not just at initial setup, so it stays reachable for monitoring? This exposed a real gap and triggered a significant rework, (7) user ran `/handoff` before any of this session's newest work was hardware-verified.
+
+### What was attempted / what worked
+
+1. **Resolved Q14/Q23/Q24** (Clear-button design, carried over from the prior session) — Clear truncates `weldml_results.csv` + the results cache + resets `weld_cloud`'s upload watermark, gated on upload completion with an explicit override. TDD'd `weld_cloud_check_clear_allowed()` (3 host tests). Committed `0c530c7`, `c86628f`.
+2. **Ticket #3 (issue #3) implemented, hardware-verified, closed.** New `wifi_provision` component (station+SoftAP, both no-credentials and failed-connect boot-time fallback paths), Q20's combined OTA+SPIFFS partition table, `webserver_register_uri()` extensibility hook. Found and fixed a real gap during hardware testing: `spiffs_create_partition_image()` was never wired into the build, so the spiffs partition was blank flash and every static-file request 404'd despite the httpd server running correctly. Committed `17d4ce6`, `b2478ba`.
+3. **Ticket #4 (issue #4) implemented, hardware-verified with two real weld cycles, closed** — TDD'd `weld_cloud_cache_append()`/`weld_cloud_build_results_json()` (7 host tests), wired an incremental 50-entry mutex-guarded cache into `weld_processor` (appended at the same point a CSV row is written, per Q23), new `GET /api/results`. Also extended `weldml_results.csv`/cache from 2 to all 22 features (Q22). Verified via HTTP relay: fresh-boot empty cache, `l060.fsj`(NP)/`l046.fsj`(IF) both appearing correctly. Committed `3741149`, `7b9ff0b`, `4288632`.
+4. **Discovered #4 was closed prematurely** — the backend (`/api/results` JSON) was hardware-verified, but no `results.html` page was ever built, so the actual acceptance criterion ("the web UI renders a table") was never true. Reopened #4, built `web/results.html` (table + Upload button), a new `webserver_serve_file()` export (so `weld_processor` can serve SPIFFS files without duplicating `webserver.c`'s logic), registered `GET /results` via the existing hook, added a "Results" nav link to every page.
+5. **Ticket #5 (issue #5) hardware-glue implemented, NOT yet hardware-verified.** The pure-logic side (`weld_cloud_build_payload()`) already existed from an earlier session — confirmed this with the user before skipping the TDD loop entirely for this ticket. Built: `POST /api/upload` (reads `tb_token`+watermark from NVS, builds payload under the cache mutex, POSTs to `https://iot.mwe-inc.com/api/v1/$TOKEN/telemetry` via `esp_http_client`+`esp_crt_bundle`, only advances the watermark on a confirmed 2xx), and extended `webserver.c`'s `/api/config` with a `tb_token` field (same pattern as `mqtt_url`/`ota_url`, value never logged).
+6. **Found and fixed a real correctness bug while building #5**: the results cache is a bounded ring buffer (evicts oldest past 50 entries), but `weld_cloud_build_payload()`'s watermark is a raw array index — once eviction starts, indices shift and a stale persisted watermark would silently desync (`build_payload` could report "nothing to upload" with genuinely new unsent rows sitting there). Fixed by tracking `s_results_cache_evicted` and converting between the NVS-persisted global watermark and the local array-index watermark around it.
+7. **User asked to rename the SoftAP** — SSID `weldml-esp32_1` (was the generic template's `ESP32-Setup`), password `indu$try` (was open). Changed via `CONFIG_WIFI_AP_SSID`/`CONFIG_WIFI_AP_PASSWORD` Kconfig defaults (+ manually synced the local, gitignored `sdkconfig` to match, since Kconfig defaults don't retroactively override an already-generated `sdkconfig`). Flashed this build.
+8. **User asked whether the device reverts to SoftAP during an extended WiFi outage, not just at boot** — it did not. The old design: once connected at boot, a later disconnect retried station forever and *never* fell back to SoftAP, no matter how long the outage lasted — the device would become completely unreachable. Confirmed with the user: 2-minute threshold before falling back, and keep auto-retrying the real network in the background afterward (not stuck in SoftAP until manual reset). **Rewrote `wifi_provision.c` significantly**: WiFi mode-switch calls now only ever happen from a new dedicated `wifi_monitor_task`, never from inside the event handler (avoids reentrancy risk with the WiFi driver's own event-processing task). After 2 minutes of continuous disconnection, switches to `WIFI_MODE_APSTA` (SoftAP comes up for monitoring access *while* station reconnect attempts keep retrying every 30s in the background); on reconnect, drops back to pure STA. Boot-time connect failure now goes straight into this same fallback+background-retry state instead of the old dead-end pure-AP mode. Committed `dceb48f`.
+9. All builds this session passed `idf.py -D BOARD=waveshare-esp32-s3-lcd-147 build` with **zero errors/warnings**, including full clean rebuilds after the larger changes (#4's fix, #5's glue, the `wifi_provision` rewrite). Host test suite (`tests/host/`) fully green throughout except the pre-existing, unrelated `test_weld_parser_features` failure (issue #7).
+10. Flashed commit `dceb48f`'s build (all 5 binaries: bootloader/partition-table/ota_data_initial/app/spiffs) to the Waveshare board via the Pi workbench — SHA-verified successfully. Asked the user to press Key2 to boot it. **The user ran `/handoff` at this exact point, before confirming the boot or verifying anything.**
+
+### What failed / remains unverified
+
+**Nothing from this session's newest work (steps 4–8 above) has been hardware-verified at all.** Specifically:
+- Whether the board has even booted the `dceb48f` firmware yet (Key2 press was requested, never confirmed).
+- Whether the SoftAP now actually broadcasts as `weldml-esp32_1` with WPA2 auth (not the old `ESP32-Setup`, open).
+- Whether `results.html` actually renders a real table in a browser (only the backend JSON was ever curl/relay-tested, which is exactly the mistake that caused #4's premature closure the first time — do not repeat it).
+- Whether `POST /api/upload` actually reaches ThingsBoard and telemetry appears on the live dashboard. This needs a real `tb_token` — see the blocker below.
+- Whether the new 2-minute steady-state SoftAP fallback and 30s background auto-retry actually work on real hardware. This is a genuinely time-consuming test (has to wait out the full outage window for real) — don't rush or skip it, but budget real wall-clock time for it.
+- Real WiFi credentials with internet access were never entered on the device this session.
+- Cache eviction past 50 entries — still never exercised on real hardware (only 2 rows have ever been cached in any session so far).
+- The error-row CSV shape (`write_error_json()`'s 33-column padding, from ticket #4's session) — still only reasoned about + Python-simulated, never hardware-triggered.
+- CPU contention between WiFi/webserver and weld-processing (Q21, a Milestone 3 concern) — still never tested with both active simultaneously.
+
+### Exact blocker
+
+The user needs to physically press **Key2** on the board to boot the just-flashed firmware. Nothing else can be verified until that's confirmed.
+
+Separately (not blocking the Key2 step, but blocking the deeper #5 verification after that): the user explicitly chose to enter both the real WiFi credentials **and** the ThingsBoard access token themselves, directly via the device's own web UI — not by giving them to the agent — specifically to avoid a repeat of a prior session's incident where a token ended up in plaintext in the chat transcript. This means the next session must **not** ask the user to paste either value into chat; instead, walk them through: connect to the device's SoftAP (or find its station IP once they've provisioned it) → open the device's own `/` (WiFi) and `/config` (ThingsBoard token) pages in their own browser → they submit both directly.
+
+### Exact next action
+
+Ask the user to confirm they've pressed Key2 to boot, then verify via the workbench's WiFi scan (`GET /api/wifi/scan` on the portal, `192.168.1.43:8080` — `workbench.local` does not resolve from this WSL environment, use the IP) that a network named `weldml-esp32_1` is broadcasting with WPA2 auth (not `ESP32-Setup`, not open). That's the cheapest possible check that the new firmware is actually running before anything deeper is attempted.
+
+### Build/test/deploy state
+
+`idf.py -D BOARD=waveshare-esp32-s3-lcd-147 build` at `dceb48f`: PASS, zero errors/warnings, confirmed via a full clean rebuild (`/tmp/build8_clean.log` on this machine, not part of the repo). Host test suite (`tests/host/`, scratch build dir `/tmp/weldml-host-tests`): `weld_cloud` fully green (20+ assertions across timestamp parsing, payload building, clear-gating, cache append/eviction, results-JSON building), `weld_inference` passes, `test_weld_parser_features` fails on the pre-existing unrelated issue #7. Flash of all 5 binaries at `dceb48f` succeeded and was SHA-verified via the Pi workbench (SCP to `casey@192.168.1.43:/tmp/`, manual Key1+Key2 download mode, `esptool` over `/dev/ttyACM0` at offsets `0x0`/`0x8000`/`0xf000`/`0x20000`/`0x620000`). Board has **not** been confirmed booted into this firmware yet.
+
+### Running state
+
+None. No background processes, dev servers, or open worktrees from this session. (Earlier background `idf.py build` invocations used during this session have all completed and are not persistent.)
+
+### Runtime/hardware state
+
+Board is physically on the Pi workbench, SLOT3 (`192.168.1.43`), just flashed with `dceb48f`'s firmware via manual Key1+Key2 download mode + Pi SSH esptool — **boot not yet confirmed** (awaiting the user's Key2 press). Before this flash, the board was last left in a clean, verified state (SoftAP broadcasting under the *old* SSID, no WiFi credentials, no ThingsBoard token saved) at the end of ticket #4's hardware verification earlier in this same session.
+
+### Deferred items / open questions the user didn't fully resolve
+
+- Confirming the board actually booted `dceb48f` — see "Exact next action."
+- Real WiFi credentials + ThingsBoard access token still need to be entered by the user directly via the device's own web UI (their explicit choice) — the agent should never ask for these values in chat.
+- The full #5 verification loop (upload → real ThingsBoard telemetry) is blocked on the token being entered.
+- The new WiFi fallback timing (2 min disconnect → SoftAP, 30s background retry, auto-recovery) needs a real, patience-requiring hardware test — not yet attempted.
+- Ticket #6 (Clear button, issue #6) — spec'd and gated-logic-TDD'd (`weld_cloud_check_clear_allowed()`), but no firmware glue (pending-flag HTTP endpoint, `weld_processor` write-idle-window truncation, cache/watermark reset) implemented yet. Unblocked, next after #5 closes out.
+- Cache eviction past 50 entries and the error-row CSV shape — still unverified on real hardware (see "What failed" above).
+- Q21 (CPU contention, WiFi/webserver vs. weld-processing) — still unverified, a Milestone 3 concern.
+
+### Project-specific rules already documented (unchanged, just a pointer)
+
+`CLAUDE.md`'s GPIO safety rules, SD-ownership rules, and the mandatory explicit-board build command (`idf.py -D BOARD=waveshare-esp32-s3-lcd-147 build` — never plain `idf.py build`) all still apply. Nothing this session contradicts them. The flash-port/Key1+Key2/Key2-to-boot workflow (see `docs/DEBUG_WORKBENCH_CONTEXT.md`) is unchanged and was used successfully multiple times this session.
+
+### Next-session prompt
+
+Read `docs/PROJECT_STATUS.md` first (this section). Ask the user to confirm they've pressed Key2 to boot the already-flashed `dceb48f` firmware, then verify via the workbench WiFi scan that `weldml-esp32_1` (WPA2, not open) is broadcasting — that confirms the new build is actually running. After that, walk the user through entering real WiFi credentials and their ThingsBoard access token directly via the device's own web UI (never ask them to paste either into chat), then verify: (a) `results.html` renders a real table, (b) `POST /api/upload` genuinely reaches ThingsBoard and telemetry appears on the live dashboard, (c) the new 2-minute SoftAP-fallback-on-extended-outage behavior and its 30s background auto-recovery, on real hardware (budget real wall-clock time for this one). Only after all of that, close out #4 and #5, then move to ticket #6.
+
+---
+
 ## Session Handoff — 2026-08-06 (Milestone 3 spec'd; Milestone 2 broken into tickets; weld_cloud TDD started; Clear-button behavior reopened, unresolved)
 
 **Branch:** `main`
