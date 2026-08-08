@@ -199,7 +199,8 @@ asked for or needed here.
 
 ## 5. Add a PASS/FAIL running-total widget
 
-**Verified live against `iot.mwe-inc.com` on 2026-08-05/06.** The original approach in this
+**Verified live against `iot.mwe-inc.com` on 2026-08-05/06, time window corrected 2026-08-08.**
+The original approach in this
 section (a `predicted_class`-only payload plus a data-key **post-processing function** to derive
 PASS/FAIL, no firmware changes) does **not work** and has been replaced. Root cause: ThingsBoard's
 `Sum` aggregation reduces the whole time window to a single already-summed value *before* any
@@ -232,13 +233,31 @@ it here.)
    - Click **"Use widget time window"** (next to "Use dashboard time window") so this widget
      doesn't inherit whatever the dashboard's global window is set to.
    - Click the time-window button (e.g. "Realtime - Current day") → switch to the **History**
-     tab → **Relative** → **Current day**. **Realtime mode does not reliably sum pre-existing
-     points** — confirmed empirically: it undercounted a known 3/2 PASS/FAIL split as 2/2,
-     apparently dropping whichever point existed before the live subscription started. History
-     mode re-queries on load and was confirmed exact.
+     tab. **Realtime mode does not reliably sum pre-existing points** — confirmed empirically:
+     it undercounted a known 3/2 PASS/FAIL split as 2/2, apparently dropping whichever point
+     existed before the live subscription started. History mode re-queries on load and was
+     confirmed exact.
+   - **Within History, use "Last N days," not "Range" (custom start/end dates) and not
+     "Relative → Current day."** Both of the latter two are corrected as of 2026-08-08:
+     - **"Current day" is too narrow** — `weld_cloud_build_payload()` timestamps each upload
+       using the weld's own embedded timestamp, not upload time (a deliberate design choice so
+       historical data doesn't get misfiled under today's date). Any upload not timestamped
+       *today* — including every one of the historical lab fixtures under `test_data/` — is
+       invisible to a "Current day" window.
+     - **"Range" (a fixed start/end date pair) looks like a fix but goes stale.** Confirmed
+       against [ThingsBoard's own docs](https://thingsboard.io/docs/user-guide/time-window/):
+       Range is a "Fixed interval. Does not update automatically" — its end date stays anchored
+       wherever you set it and does not advance to include tomorrow's data. "Last N days" is the
+       one that continuously slides forward with real time.
+     - Set **"Last" → `2700` days** (this build's Last picker only offers a day-unit, no
+       weeks/months/years — just use a large day-count). That comfortably covers every fixture
+       under `test_data/` (oldest is `2020-07-17`, ~2213 days back from 2026-08-08) with margin,
+       while still being tight enough not to sum over irrelevant decades-old data. **Verified
+       live:** after this change, the widget correctly showed PASS:7 / FAIL:4 / Total:11 across
+       all historical uploads, not just today's.
    - **Gotcha:** editing a widget's Series list (e.g. changing a data key) can silently reset
      the time window back to the Realtime default. After any series edit, reopen the time-window
-     button and confirm it still says **History - Current day** before saving.
+     button and confirm it still says **History - Last 2700 days** before saving.
 5. Title the widget "PASS / FAIL Totals" and click **Apply**.
 6. **Save at all three levels** — this is the other thing that bit us during setup:
    1. Data Key Configuration dialog → **Save**

@@ -335,6 +335,13 @@ void webserver_start(void)
      * registered via webserver_register_uri(): GET /results, GET /api/results,
      * POST /api/upload (tickets #4/#5), POST /api/clear (ticket #6, upcoming). */
     config.max_uri_handlers = 17;
+    /* Default worker stack (4096) is too small for POST /api/upload's synchronous
+     * esp_http_client + esp_crt_bundle_attach TLS handshake -- mbedTLS's handshake
+     * and cert-bundle parsing routinely exceed that, causing a stack-overflow
+     * reboot (confirmed on hardware: the device crashed mid-upload, before any
+     * telemetry ever reached ThingsBoard). Matches the stack size ota.c already
+     * uses for the same kind of esp_https_ota() TLS operation. */
+    config.stack_size = 8192;
 
     if (httpd_start(&s_server, &config) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start HTTP server");

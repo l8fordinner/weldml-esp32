@@ -380,6 +380,48 @@ timing test (flagged unverified in the previous handoff) also remains untested.
 
 ---
 
+## Ticket #5 — Upload Stack-Overflow Crash Fix + ThingsBoard Widget Time Window (2026-08-08)
+
+**Bug found on hardware:** `POST /api/upload` (ticket #5) crashed the device every time it
+actually had a row to send — this was the first time the firmware had ever made a real
+outbound HTTPS/TLS call on real hardware, and it had never been exercised end-to-end before.
+Root cause: `handler_api_upload()` runs `esp_http_client` + `esp_crt_bundle_attach` (a full TLS
+handshake and cert-bundle parse) synchronously inside an ESP-IDF httpd worker-task callback,
+whose default stack (`HTTPD_DEFAULT_CONFIG()`, `esp_http_server.h`) is only 4096 bytes —
+too small for mbedTLS's handshake/cert-bundle stack usage, causing a stack-overflow reboot
+partway through the call. Confirmed via ThingsBoard's own telemetry (checked directly via the
+MCP connection): no payload data had ever reached the platform from this device before the fix,
+consistent with the crash happening mid-request. **Fix:** `webserver_start()` now sets
+`config.stack_size = 8192` (matching what `components/ota/ota.c` already uses for the same kind
+of TLS call) in `components/webserver/webserver.c`.
+
+**Hardware test (Waveshare ESP32-S3-LCD-1.47, Pi workbench SLOT3):**
+
+| Test | Result | Notes |
+|------|--------|-------|
+| Build + flash with the stack-size fix | PASS | Zero errors/warnings; SHA-verified flash |
+| `POST /api/upload` with a real cached row (`l060.fsj`) | PASS | `{"ok":true,"uploaded":1}`, no crash, `uptime_ms` climbed normally afterward (confirmed no reboot) |
+| Data integrity on the platform side | PASS | Verified directly via ThingsBoard's own telemetry (MCP `getLatestTimeseries`) — `label:"NP"`, `FFT_FrequencyBandwidth:33.1813202`, `MinPositionStage3:1.86000001`, `window_count:1854`, `source_filename:"l060.fsj"` all landed exactly matching the fixture |
+
+**Side quest — the PASS/FAIL dashboard widget also needed a time-window fix**, unrelated to the
+firmware bug: `weld_cloud_build_payload()` timestamps uploads using the weld's own embedded
+timestamp (not upload time — a deliberate earlier design choice), so `l060.fsj`'s 2020-07-17
+timestamp was invisible to the widget's "Current day" window even after the upload succeeded.
+Corrected to **History → Last → 2700 days** (not "Range"/fixed dates — confirmed against
+[ThingsBoard's own docs](https://thingsboard.io/docs/user-guide/time-window/) that a fixed
+range does not auto-advance and would silently go stale). Verified live: widget now shows
+PASS:7 / FAIL:4 / Total:11. See `docs/THINGSBOARD_SETUP.md` Section 5 for the corrected
+step-by-step.
+
+**Not verified this session:** whether the crash's brief but severe USB-enumeration disruption
+(observed during debugging — the board's native USB dropped off the Pi's hub hard enough to
+need a full hub power-cycle to recover once) ever recurs under normal (non-crashing) upload
+use now that the fix is in; the fixed httpd worker stack size's effect on overall free-heap
+margin under sustained/repeated use (single-call heap delta observed was small, ~25KB, not
+flagged as a leak but not stress-tested either).
+
+---
+
 ## Deferred to Product Fork
 
 These items are not part of the base template and do not need to be tested here:
