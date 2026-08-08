@@ -341,6 +341,45 @@ but no error condition was triggered on real hardware to confirm it end-to-end.
 
 ---
 
+## Configurable Server URL + Multi-WiFi Saved-Network List (2026-08-08)
+
+**Change:** `weld_processor.c`'s upload handler now reads a `tb_url` NVS field (new
+`/config` page input) instead of the fixed `#define THINGSBOARD_HOST`, defaulting to
+`iot.mwe-inc.com` when unset — lets the target server/platform be changed or tested
+without a firmware rebuild. `components/wifi_provision/` reworked from a single
+`wifi_ssid`/`wifi_pass` NVS pair to an ordered list (`wifi_count` + `wifi_ssidN`/
+`wifi_passN`, index 0 = most recently added, capped at `WIFI_PROVISION_MAX_NETWORKS`=5);
+adding a network promotes it to the front instead of overwriting, both the initial boot
+attempt and every background-retry cycle (while in AP fallback) now try the whole list
+in order rather than a single network. One-time migration (`wifi_list_migrate_legacy()`)
+carries an existing single saved network into the new list format transparently. New
+`GET /api/wifi/list` / `POST /api/wifi/delete` endpoints back a "Saved Networks" section
+on the WiFi page with per-entry delete buttons. Results page button relabeled "Upload to
+Server" (was "Upload to ThingsBoard") to match the now-configurable server.
+
+**Hardware test (Waveshare ESP32-S3-LCD-1.47, Pi workbench SLOT3, manual Key1+Key2
+download mode + Pi SSH esptool, same as prior sessions):**
+
+| Test | Result | Notes |
+|------|--------|-------|
+| Build (`idf.py -D BOARD=waveshare-esp32-s3-lcd-147 build`), full clean rebuild | PASS | Zero errors/warnings |
+| Host test suite (`weld_cloud`, `weld_inference`) | PASS | Unaffected by this session's changes (hardware-glue only). `test_weld_parser_features` still fails on the pre-existing, unrelated issue #7 |
+| Flash (all 5 binaries incl. spiffs) | PASS | Both firmware and spiffs hashes verified; Key2 press required to boot (same known quirk) |
+| Legacy single-credential migration to the new list format, on first boot after this flash | PASS | `GET /api/wifi/list` returned `["Other"]` — the credential entered in a previous step of this same session carried forward with no user action and no re-provisioning needed |
+| Station reconnect using the migrated credential | PASS | Device came back up on `192.168.1.61` (`/api/status` showed `wifi_ssid:"Other"`, `uptime_ms` consistent with the fresh boot) |
+| `/config` page serves the new Server URL field | PASS | `GET /config` HTML contains `id="tb_url"` and the "Server URL"/"Server Access Token" labels |
+| `/results` page shows the relabeled button | PASS | `GET /results` HTML contains "Upload to Server", not "Upload to ThingsBoard" |
+| `/` page serves the new Saved Networks section | PASS | `GET /` HTML contains the "Saved Networks" heading and list container |
+| `POST /api/wifi/delete` negative case (nonexistent SSID) | PASS | Returned `{"ok":false,"error":"not found"}` without touching the device's only live saved network |
+
+**Not verified this session (deliberately — no second real network was available to test
+with safely):** the actual most-recently-added-tried-first ordering with two or more real
+saved networks; deleting a network that's actually in the list; the full-list background
+retry cycling while already in AP fallback. The 2-minute steady-state SoftAP-fallback
+timing test (flagged unverified in the previous handoff) also remains untested.
+
+---
+
 ## Deferred to Product Fork
 
 These items are not part of the base template and do not need to be tested here:

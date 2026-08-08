@@ -10,10 +10,12 @@
  *   GET  /config        → config.html (MQTT broker config)
  *   GET  /ota           → ota.html    (OTA trigger + status)
  *   GET  /status        → status.html (device info)
- *   GET  /api/status    → JSON device status
- *   POST /api/wifi      → JSON {ssid, password} → save to NVS, reconnect
- *   POST /api/config    → JSON {mqtt_url, mqtt_port} → save to NVS
- *   POST /api/ota       → trigger OTA update
+ *   GET  /api/status     → JSON device status
+ *   POST /api/wifi       → JSON {ssid, password} → add/promote saved network, reboot
+ *   GET  /api/wifi/list  → JSON array of saved SSIDs (no passwords)
+ *   POST /api/wifi/delete → JSON {ssid} → remove a saved network
+ *   POST /api/config     → JSON {mqtt_url, ota_url, tb_url, tb_token} → save to NVS
+ *   POST /api/ota        → trigger OTA update
  */
 
 #include <string.h>
@@ -27,6 +29,7 @@
 #include "esp_wifi.h"
 #include "esp_system.h"
 #include "webserver.h"
+#include "wifi_provision.h"
 
 static const char *TAG = "webserver";
 static httpd_handle_t s_server = NULL;
@@ -169,17 +172,59 @@ static esp_err_t handler_api_wifi(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    nvs_handle_t nvs;
-    ESP_ERROR_CHECK(nvs_open("config", NVS_READWRITE, &nvs));
-    nvs_set_str(nvs, "wifi_ssid", ssid);
-    nvs_set_str(nvs, "wifi_pass", pass);
-    nvs_commit(nvs);
-    nvs_close(nvs);
+    wifi_provision_add_network(ssid, pass);
 
-    ESP_LOGI(TAG, "WiFi credentials saved — SSID: %s", ssid);
+    ESP_LOGI(TAG, "WiFi network added — SSID: %s", ssid);
     httpd_resp_sendstr(req, "{\"ok\":true,\"message\":\"Saved. Rebooting.\"}");
     vTaskDelay(pdMS_TO_TICKS(500));
     esp_restart();
+    return ESP_OK;
+}
+
+/* ── API: GET /api/wifi/list ─────────────────────────────────────────────── */
+
+static esp_err_t handler_api_wifi_list(httpd_req_t *req)
+{
+    char ssids[WIFI_PROVISION_MAX_NETWORKS][33];
+    int n = wifi_provision_list_networks(ssids, WIFI_PROVISION_MAX_NETWORKS);
+
+    char json[WIFI_PROVISION_MAX_NETWORKS * 40 + 8] = "[";
+    for (int i = 0; i < n; i++) {
+        if (i > 0) {
+            strlcat(json, ",", sizeof(json));
+        }
+        strlcat(json, "\"", sizeof(json));
+        strlcat(json, ssids[i], sizeof(json));
+        strlcat(json, "\"", sizeof(json));
+    }
+    strlcat(json, "]", sizeof(json));
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json);
+    return ESP_OK;
+}
+
+/* ── API: POST /api/wifi/delete ──────────────────────────────────────────── */
+
+static esp_err_t handler_api_wifi_delete(httpd_req_t *req)
+{
+    char body[64] = {0};
+    int ret = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (ret <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
+        return ESP_FAIL;
+    }
+
+    char ssid[64] = {0};
+    json_str(body, "ssid", ssid, sizeof(ssid));
+    if (ssid[0] == '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "ssid required");
+        return ESP_FAIL;
+    }
+
+    bool removed = wifi_provision_delete_network(ssid);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, removed ? "{\"ok\":true}" : "{\"ok\":false,\"error\":\"not found\"}");
     return ESP_OK;
 }
 
@@ -196,12 +241,14 @@ static esp_err_t handler_api_config(httpd_req_t *req)
 
     char mqtt_url[256] = {0};
     char ota_url[512]  = {0};
+    char tb_url[128]   = {0};
     char tb_token[128] = {0};
     json_str(body, "mqtt_url",  mqtt_url,  sizeof(mqtt_url));
     json_str(body, "ota_url",   ota_url,   sizeof(ota_url));
+    json_str(body, "tb_url",    tb_url,    sizeof(tb_url));
     json_str(body, "tb_token",  tb_token,  sizeof(tb_token));
 
-    if (mqtt_url[0] != '\0' || ota_url[0] != '\0' || tb_token[0] != '\0') {
+    if (mqtt_url[0] != '\0' || ota_url[0] != '\0' || tb_url[0] != '\0' || tb_token[0] != '\0') {
         nvs_handle_t nvs;
         ESP_ERROR_CHECK(nvs_open("config", NVS_READWRITE, &nvs));
         if (mqtt_url[0] != '\0') {
@@ -212,9 +259,13 @@ static esp_err_t handler_api_config(httpd_req_t *req)
             nvs_set_str(nvs, "ota_url", ota_url);
             ESP_LOGI(TAG, "OTA URL saved: %s", ota_url);
         }
+        if (tb_url[0] != '\0') {
+            nvs_set_str(nvs, "tb_url", tb_url);
+            ESP_LOGI(TAG, "Server URL saved: %s", tb_url);
+        }
         if (tb_token[0] != '\0') {
             nvs_set_str(nvs, "tb_token", tb_token);
-            ESP_LOGI(TAG, "ThingsBoard access token saved"); /* never log the value -- it's a credential */
+            ESP_LOGI(TAG, "Server access token saved"); /* never log the value -- it's a credential */
         }
         nvs_commit(nvs);
         nvs_close(nvs);
@@ -266,6 +317,8 @@ static const httpd_uri_t s_uris[] = {
     { .uri = "/app.js",      .method = HTTP_GET,  .handler = handler_appjs   },
     { .uri = "/api/status",  .method = HTTP_GET,  .handler = handler_api_status },
     { .uri = "/api/wifi",          .method = HTTP_POST, .handler = handler_api_wifi          },
+    { .uri = "/api/wifi/list",     .method = HTTP_GET,  .handler = handler_api_wifi_list     },
+    { .uri = "/api/wifi/delete",   .method = HTTP_POST, .handler = handler_api_wifi_delete   },
     { .uri = "/api/factory-reset", .method = HTTP_POST, .handler = handler_api_factory_reset },
     { .uri = "/api/config",  .method = HTTP_POST, .handler = handler_api_config },
     { .uri = "/api/ota",     .method = HTTP_POST, .handler = handler_api_ota    },
@@ -278,10 +331,10 @@ void webserver_start(void)
     spiffs_init();
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    /* 11 built-in URIs (s_uris below) + 4 slots for product-specific endpoints
+    /* 13 built-in URIs (s_uris below) + 4 slots for product-specific endpoints
      * registered via webserver_register_uri(): GET /results, GET /api/results,
      * POST /api/upload (tickets #4/#5), POST /api/clear (ticket #6, upcoming). */
-    config.max_uri_handlers = 15;
+    config.max_uri_handlers = 17;
 
     if (httpd_start(&s_server, &config) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start HTTP server");

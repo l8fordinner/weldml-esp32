@@ -32,6 +32,14 @@
   <p id="status-msg"></p>
 </div>
 
+<div class="card">
+  <h2>Saved Networks</h2>
+  <p style="margin-bottom:0.75rem; font-size:0.85rem; color:var(--muted);">
+    Tried in order on next boot/reconnect — most recently added first.
+  </p>
+  <div id="saved-networks"><p class="muted">Loading…</p></div>
+</div>
+
 <script src="/app.js"></script>
 <script>
 document.getElementById('wifi-form').addEventListener('submit', async e => {
@@ -47,6 +55,38 @@ document.getElementById('wifi-form').addEventListener('submit', async e => {
     showStatus('Request failed: ' + err.message, 'error');
   }
 });
+
+async function loadSavedNetworks() {
+  const el = document.getElementById('saved-networks');
+  try {
+    const ssids = await (await fetch('/api/wifi/list')).json();
+    if (!ssids.length) {
+      el.innerHTML = '<p class="muted">No saved networks yet.</p>';
+      return;
+    }
+    el.innerHTML = ssids.map((ssid, i) => `
+      <div class="info-row">
+        <span>${i === 0 ? '<strong>' + ssid + '</strong> (tried first)' : ssid}</span>
+        <button type="button" class="danger" data-ssid="${ssid}">Delete</button>
+      </div>
+    `).join('');
+    el.querySelectorAll('button[data-ssid]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try {
+          await postJSON('/api/wifi/delete', { ssid: btn.dataset.ssid });
+          loadSavedNetworks();
+        } catch (err) {
+          btn.disabled = false;
+        }
+      });
+    });
+  } catch (err) {
+    el.innerHTML = '<p class="muted">Could not load saved networks.</p>';
+  }
+}
+
+loadSavedNetworks();
 </script>
 </body>
 </html>

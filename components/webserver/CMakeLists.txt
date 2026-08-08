@@ -9,4 +9,5 @@ idf_component_register(
         spiffs
         esp_timer
         ota
+        wifi_provision
 )

@@ -67,11 +67,13 @@ static uint32_t s_results_cache_evicted = 0;
  * the HTTP server task's stack. */
 #define RESULTS_JSON_BUF_SIZE (64 * 1024)
 
-/* Fixed for this deployment (see docs/THINGSBOARD_SETUP.md) -- only the per-device access
- * token varies, stored via POST /api/config's tb_token field. */
-#define THINGSBOARD_HOST "iot.mwe-inc.com"
+/* Default host if the user never sets one via POST /api/config's tb_url field
+ * (see docs/THINGSBOARD_SETUP.md) -- lets the server/platform be changed or
+ * tested against a different one without a firmware rebuild. */
+#define THINGSBOARD_HOST_DEFAULT "iot.mwe-inc.com"
+#define TB_HOST_MAX_LEN  128
 #define TB_TOKEN_MAX_LEN 128
-#define TB_URL_BUF_SIZE  256
+#define TB_URL_BUF_SIZE  320
 
 /*
  * Write-activity tracking.
@@ -600,17 +602,23 @@ static esp_err_t handler_results_page(httpd_req_t *req)
 static esp_err_t handler_api_upload(httpd_req_t *req)
 {
     char tb_token[TB_TOKEN_MAX_LEN] = {0};
+    char tb_host[TB_HOST_MAX_LEN] = {0};
     nvs_handle_t nvs;
     if (nvs_open("config", NVS_READONLY, &nvs) == ESP_OK) {
         size_t len = sizeof(tb_token);
         nvs_get_str(nvs, "tb_token", tb_token, &len);
+        len = sizeof(tb_host);
+        nvs_get_str(nvs, "tb_url", tb_host, &len);
         nvs_close(nvs);
+    }
+    if (tb_host[0] == '\0') {
+        strncpy(tb_host, THINGSBOARD_HOST_DEFAULT, sizeof(tb_host) - 1);
     }
 
     httpd_resp_set_type(req, "application/json");
 
     if (tb_token[0] == '\0') {
-        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"no ThingsBoard access token configured\"}");
+        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"no server access token configured\"}");
         return ESP_OK;
     }
 
@@ -655,7 +663,7 @@ static esp_err_t handler_api_upload(httpd_req_t *req)
     }
 
     char url[TB_URL_BUF_SIZE];
-    snprintf(url, sizeof(url), "https://%s/api/v1/%s/telemetry", THINGSBOARD_HOST, tb_token);
+    snprintf(url, sizeof(url), "https://%s/api/v1/%s/telemetry", tb_host, tb_token);
 
     esp_http_client_config_t http_cfg = {
         .url = url,

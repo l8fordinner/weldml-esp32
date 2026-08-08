@@ -1,23 +1,28 @@
 /*
  * wifi_provision.c — WiFi station bring-up with SoftAP fallback.
  *
- * Station mode uses credentials from NVS ("config"/wifi_ssid,wifi_pass — the
- * keys webserver.c's POST /api/wifi handler writes), falling back to Kconfig
- * defaults (CONFIG_WIFI_SSID/CONFIG_WIFI_PASSWORD). If no SSID is available at
- * all, starts a pure SoftAP (CONFIG_WIFI_AP_*) forever — there's nothing to
- * retry until credentials are provisioned (which reboots the device anyway).
+ * Station mode tries each saved network from a list in NVS ("config"
+ * namespace: "wifi_count" + "wifi_ssidN"/"wifi_passN", index 0 = most
+ * recently added), in order, before falling back to the Kconfig defaults
+ * (CONFIG_WIFI_SSID/CONFIG_WIFI_PASSWORD) as a synthetic last entry. If no
+ * SSID is available at all, starts a pure SoftAP (CONFIG_WIFI_AP_*) forever
+ * — there's nothing to retry until credentials are provisioned (which
+ * reboots the device anyway).
  *
- * If credentials exist but the device can't reach that network — either the
- * initial boot-time connect attempt fails/times out, or a previously-working
- * connection stays down for STEADY_STATE_FALLBACK_MS — a background monitor
- * task switches to WIFI_MODE_APSTA: the SoftAP comes up (so the device stays
- * reachable for monitoring/reconfiguration) while station reconnect attempts
- * keep retrying in the background every BACKGROUND_RETRY_INTERVAL_MS. Once
- * station reconnects, the monitor task drops back to pure STA mode.
+ * If every saved network fails to connect — either at the initial boot-time
+ * attempt, or a previously-working connection stays down for
+ * STEADY_STATE_FALLBACK_MS — a background monitor task switches to
+ * WIFI_MODE_APSTA: the SoftAP comes up (so the device stays reachable for
+ * monitoring/reconfiguration) while station reconnect attempts cycle through
+ * the whole saved-network list again every BACKGROUND_RETRY_INTERVAL_MS.
+ * Once station reconnects, the monitor task drops back to pure STA mode.
  *
  * WiFi mode-switch calls (esp_wifi_set_mode et al.) only ever happen from the
- * monitor task, never from inside the event handler, to avoid reentrancy
- * issues with the WiFi driver's own event-processing task.
+ * monitor task or the initial bring-up path, never from inside the event
+ * handler, to avoid reentrancy issues with the WiFi driver's own
+ * event-processing task. Retargeting the STA interface to a different saved
+ * network (esp_wifi_set_config + esp_wifi_connect) during background retries
+ * does not touch the mode, so an active SoftAP in APSTA is left undisturbed.
  */
 
 #include <string.h>
@@ -64,6 +69,7 @@ static bool s_boot_decided;
 
 static esp_netif_t *s_ap_netif;
 static bool s_have_credentials;
+static bool s_wifi_started;
 
 /* Written by the event handler, read by the monitor task. Simple scalar
  * writes (bool/int64_t), each field single-writer -- no mutex needed, same
@@ -117,72 +123,289 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     }
 }
 
-static void load_credentials(char *ssid, size_t ssid_size, char *pass, size_t pass_size)
+/* One-time migration from the old single-credential keys ("wifi_ssid" /
+ * "wifi_pass") to the list format. Safe to call every boot -- once
+ * "wifi_count" exists, this is a no-op. */
+static void wifi_list_migrate_legacy(void)
+{
+    nvs_handle_t nvs;
+    if (nvs_open("config", NVS_READWRITE, &nvs) != ESP_OK) {
+        return;
+    }
+
+    uint8_t count = 0;
+    if (nvs_get_u8(nvs, "wifi_count", &count) == ESP_OK) {
+        nvs_close(nvs);
+        return;
+    }
+
+    char ssid[33] = {0};
+    size_t len = sizeof(ssid);
+    if (nvs_get_str(nvs, "wifi_ssid", ssid, &len) == ESP_OK && ssid[0] != '\0') {
+        char pass[65] = {0};
+        len = sizeof(pass);
+        nvs_get_str(nvs, "wifi_pass", pass, &len);
+
+        nvs_set_str(nvs, "wifi_ssid0", ssid);
+        nvs_set_str(nvs, "wifi_pass0", pass);
+        nvs_set_u8(nvs, "wifi_count", 1);
+        nvs_erase_key(nvs, "wifi_ssid");
+        nvs_erase_key(nvs, "wifi_pass");
+        ESP_LOGI(TAG, "Migrated legacy single WiFi credential to saved-network list");
+    } else {
+        /* Nothing to migrate -- record count=0 so this check is skipped on
+         * every future boot instead of re-running it. */
+        nvs_set_u8(nvs, "wifi_count", 0);
+    }
+    nvs_commit(nvs);
+    nvs_close(nvs);
+}
+
+/* Number of saved networks, or 1 if the list is empty but a Kconfig default
+ * SSID is compiled in (synthetic last-resort entry -- see wifi_list_get()). */
+static int wifi_list_count(void)
+{
+    nvs_handle_t nvs;
+    uint8_t count = 0;
+    if (nvs_open("config", NVS_READONLY, &nvs) == ESP_OK) {
+        nvs_get_u8(nvs, "wifi_count", &count);
+        nvs_close(nvs);
+    }
+    if (count == 0 && strlen(CONFIG_WIFI_SSID) > 0) {
+        return 1;
+    }
+    return count;
+}
+
+/* idx 0 = most recently added. Falls back to the Kconfig default when the
+ * real list is empty (idx must be 0 in that case). */
+static bool wifi_list_get(int idx, char *ssid, size_t ssid_size, char *pass, size_t pass_size)
 {
     ssid[0] = '\0';
     pass[0] = '\0';
 
     nvs_handle_t nvs;
+    uint8_t count = 0;
     if (nvs_open("config", NVS_READONLY, &nvs) == ESP_OK) {
-        size_t len = ssid_size;
-        nvs_get_str(nvs, "wifi_ssid", ssid, &len);
-        len = pass_size;
-        nvs_get_str(nvs, "wifi_pass", pass, &len);
-        nvs_close(nvs);
+        nvs_get_u8(nvs, "wifi_count", &count);
     }
 
-    if (ssid[0] == '\0') {
-        strncpy(ssid, CONFIG_WIFI_SSID, ssid_size - 1);
-        ssid[ssid_size - 1] = '\0';
-        strncpy(pass, CONFIG_WIFI_PASSWORD, pass_size - 1);
-        pass[pass_size - 1] = '\0';
+    if ((uint8_t)idx >= count) {
+        if (nvs) {
+            nvs_close(nvs);
+        }
+        if (count == 0 && idx == 0 && strlen(CONFIG_WIFI_SSID) > 0) {
+            strncpy(ssid, CONFIG_WIFI_SSID, ssid_size - 1);
+            ssid[ssid_size - 1] = '\0';
+            strncpy(pass, CONFIG_WIFI_PASSWORD, pass_size - 1);
+            pass[pass_size - 1] = '\0';
+            return true;
+        }
+        return false;
     }
+
+    char key[24];
+    snprintf(key, sizeof(key), "wifi_ssid%d", idx);
+    size_t len = ssid_size;
+    nvs_get_str(nvs, key, ssid, &len);
+    snprintf(key, sizeof(key), "wifi_pass%d", idx);
+    len = pass_size;
+    nvs_get_str(nvs, key, pass, &len);
+    nvs_close(nvs);
+    return ssid[0] != '\0';
 }
 
-/* Attempts the initial boot-time station connect, bounded to
- * STA_CONNECT_TIMEOUT_MS. The event handler and STA netif stay registered
- * regardless of outcome -- on failure, the caller falls back to AP mode but
- * background reconnect attempts (driven by the monitor task) keep using the
- * same handler. */
-static bool try_connect_station(const char *ssid, const char *pass)
+/* Loads up to WIFI_PROVISION_MAX_NETWORKS saved entries into fixed-size
+ * scratch arrays. Shared by wifi_list_add()/wifi_list_delete() since both
+ * need to rewrite the whole list. */
+static int wifi_list_load_all(char ssid_out[][33], char pass_out[][65])
+{
+    nvs_handle_t nvs;
+    uint8_t count = 0;
+    if (nvs_open("config", NVS_READONLY, &nvs) == ESP_OK) {
+        nvs_get_u8(nvs, "wifi_count", &count);
+        nvs_close(nvs);
+    }
+    if (count > WIFI_PROVISION_MAX_NETWORKS) {
+        count = WIFI_PROVISION_MAX_NETWORKS;
+    }
+    for (int i = 0; i < count; i++) {
+        wifi_list_get(i, ssid_out[i], 33, pass_out[i], 65);
+    }
+    return count;
+}
+
+static void wifi_list_write_all(const char ssid_in[][33], const char pass_in[][65], int count)
+{
+    nvs_handle_t nvs;
+    if (nvs_open("config", NVS_READWRITE, &nvs) != ESP_OK) {
+        return;
+    }
+    for (int i = 0; i < count; i++) {
+        char key[24];
+        snprintf(key, sizeof(key), "wifi_ssid%d", i);
+        nvs_set_str(nvs, key, ssid_in[i]);
+        snprintf(key, sizeof(key), "wifi_pass%d", i);
+        nvs_set_str(nvs, key, pass_in[i]);
+    }
+    nvs_set_u8(nvs, "wifi_count", (uint8_t)count);
+    nvs_commit(nvs);
+    nvs_close(nvs);
+}
+
+static void wifi_list_add(const char *ssid, const char *pass)
+{
+    char old_ssid[WIFI_PROVISION_MAX_NETWORKS][33] = {{0}};
+    char old_pass[WIFI_PROVISION_MAX_NETWORKS][65] = {{0}};
+    int old_count = wifi_list_load_all(old_ssid, old_pass);
+
+    char new_ssid[WIFI_PROVISION_MAX_NETWORKS][33];
+    char new_pass[WIFI_PROVISION_MAX_NETWORKS][65];
+    strncpy(new_ssid[0], ssid, sizeof(new_ssid[0]) - 1);
+    new_ssid[0][sizeof(new_ssid[0]) - 1] = '\0';
+    strncpy(new_pass[0], pass, sizeof(new_pass[0]) - 1);
+    new_pass[0][sizeof(new_pass[0]) - 1] = '\0';
+
+    int new_count = 1;
+    for (int i = 0; i < old_count && new_count < WIFI_PROVISION_MAX_NETWORKS; i++) {
+        if (strcmp(old_ssid[i], ssid) == 0) {
+            continue; /* re-added: already promoted to front above */
+        }
+        strncpy(new_ssid[new_count], old_ssid[i], sizeof(new_ssid[new_count]) - 1);
+        new_ssid[new_count][sizeof(new_ssid[new_count]) - 1] = '\0';
+        strncpy(new_pass[new_count], old_pass[i], sizeof(new_pass[new_count]) - 1);
+        new_pass[new_count][sizeof(new_pass[new_count]) - 1] = '\0';
+        new_count++;
+    }
+
+    wifi_list_write_all(new_ssid, new_pass, new_count);
+    ESP_LOGI(TAG, "WiFi network saved (now first to try): %s", ssid);
+}
+
+static bool wifi_list_delete(const char *ssid)
+{
+    char old_ssid[WIFI_PROVISION_MAX_NETWORKS][33] = {{0}};
+    char old_pass[WIFI_PROVISION_MAX_NETWORKS][65] = {{0}};
+    int old_count = wifi_list_load_all(old_ssid, old_pass);
+
+    char new_ssid[WIFI_PROVISION_MAX_NETWORKS][33];
+    char new_pass[WIFI_PROVISION_MAX_NETWORKS][65];
+    int new_count = 0;
+    bool found = false;
+    for (int i = 0; i < old_count; i++) {
+        if (strcmp(old_ssid[i], ssid) == 0) {
+            found = true;
+            continue;
+        }
+        strncpy(new_ssid[new_count], old_ssid[i], sizeof(new_ssid[new_count]) - 1);
+        new_ssid[new_count][sizeof(new_ssid[new_count]) - 1] = '\0';
+        strncpy(new_pass[new_count], old_pass[i], sizeof(new_pass[new_count]) - 1);
+        new_pass[new_count][sizeof(new_pass[new_count]) - 1] = '\0';
+        new_count++;
+    }
+
+    if (found) {
+        wifi_list_write_all(new_ssid, new_pass, new_count);
+        ESP_LOGI(TAG, "WiFi network removed: %s", ssid);
+    }
+    return found;
+}
+
+void wifi_provision_add_network(const char *ssid, const char *pass)
+{
+    wifi_list_add(ssid, pass);
+}
+
+bool wifi_provision_delete_network(const char *ssid)
+{
+    return wifi_list_delete(ssid);
+}
+
+int wifi_provision_list_networks(char ssids[][33], int max_out)
+{
+    nvs_handle_t nvs;
+    uint8_t count = 0;
+    if (nvs_open("config", NVS_READONLY, &nvs) == ESP_OK) {
+        nvs_get_u8(nvs, "wifi_count", &count);
+        nvs_close(nvs);
+    }
+    int n = ((int)count < max_out) ? (int)count : max_out;
+    char pass_unused[65];
+    for (int i = 0; i < n; i++) {
+        wifi_list_get(i, ssids[i], 33, pass_unused, sizeof(pass_unused));
+    }
+    return n;
+}
+
+/* Brings up the STA netif/handlers/mode exactly once, ever. Must run before
+ * the first entry is tried; later calls (background retries) skip straight
+ * to esp_wifi_connect() on the already-running driver, so an active SoftAP
+ * in APSTA mode is never disturbed by a mode-switch here. */
+static void ensure_wifi_started(void)
 {
     esp_netif_create_default_wifi_sta();
-
-    s_wifi_event_group = xEventGroupCreate();
-    s_retry_count = 0;
-    s_boot_decided = false;
-
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, &s_wifi_handler));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, &s_ip_handler));
-
-    wifi_config_t wifi_config = {0};
-    strncpy((char *)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid) - 1);
-    strncpy((char *)wifi_config.sta.password, pass, sizeof(wifi_config.sta.password) - 1);
-
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
+}
 
-    EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
-                                            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-                                            pdFALSE, pdFALSE,
-                                            pdMS_TO_TICKS(STA_CONNECT_TIMEOUT_MS));
-    s_boot_decided = true;
+/* Tries each saved network (index 0 = most recently added) in order, each
+ * bounded by STA_CONNECT_TIMEOUT_MS. Returns true and leaves STA connected
+ * on the first success; returns false if every saved network failed. Safe
+ * to call repeatedly -- used both for the initial boot attempt and for full
+ * background-retry cycles once already in AP fallback. */
+static bool try_all_networks(void)
+{
+    int count = wifi_list_count();
 
-    bool connected = (bits & WIFI_CONNECTED_BIT) != 0;
-
-    vEventGroupDelete(s_wifi_event_group);
-    s_wifi_event_group = NULL;
-
-    if (connected) {
-        ESP_LOGI(TAG, "Connected to WiFi station: %s", ssid);
-    } else {
-        ESP_LOGW(TAG, "Station connect failed/timed out (retries=%d) at boot", s_retry_count);
+    if (!s_wifi_started) {
+        ensure_wifi_started();
     }
 
-    return connected;
+    for (int i = 0; i < count; i++) {
+        char ssid[33] = {0};
+        char pass[65] = {0};
+        if (!wifi_list_get(i, ssid, sizeof(ssid), pass, sizeof(pass))) {
+            continue;
+        }
+
+        wifi_config_t wifi_config = {0};
+        strncpy((char *)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid) - 1);
+        strncpy((char *)wifi_config.sta.password, pass, sizeof(wifi_config.sta.password) - 1);
+
+        s_wifi_event_group = xEventGroupCreate();
+        s_retry_count = 0;
+        s_boot_decided = false;
+
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+
+        if (!s_wifi_started) {
+            ESP_ERROR_CHECK(esp_wifi_start());
+            s_wifi_started = true;
+        } else {
+            esp_wifi_connect();
+        }
+
+        EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
+                                                WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+                                                pdFALSE, pdFALSE,
+                                                pdMS_TO_TICKS(STA_CONNECT_TIMEOUT_MS));
+        s_boot_decided = true;
+
+        vEventGroupDelete(s_wifi_event_group);
+        s_wifi_event_group = NULL;
+
+        if (bits & WIFI_CONNECTED_BIT) {
+            ESP_LOGI(TAG, "Connected to WiFi station: %s (saved entry %d)", ssid, i);
+            return true;
+        }
+        ESP_LOGW(TAG, "Station connect failed/timed out for saved network %d (%s), retries=%d",
+                 i, ssid, s_retry_count);
+    }
+
+    return false;
 }
 
 /* Shared AP config (SSID/password/channel/max_conn) applied by both the
@@ -265,7 +488,11 @@ static void wifi_monitor_task(void *arg)
             int64_t now_ms = esp_timer_get_time() / 1000;
             if (now_ms - last_retry_ms >= BACKGROUND_RETRY_INTERVAL_MS) {
                 last_retry_ms = now_ms;
-                esp_wifi_connect();
+                /* Cycles the whole saved-network list again, not just the
+                 * last one tried -- so a newer/different network added
+                 * later, or one that only just came back up, both get a
+                 * fair shot while we're already in fallback. */
+                try_all_networks();
             }
         }
     }
@@ -273,17 +500,15 @@ static void wifi_monitor_task(void *arg)
 
 bool wifi_provision_start(void)
 {
-    char ssid[33] = {0};
-    char pass[65] = {0};
-    load_credentials(ssid, sizeof(ssid), pass, sizeof(pass));
-    s_have_credentials = (ssid[0] != '\0');
+    wifi_list_migrate_legacy();
+    s_have_credentials = (wifi_list_count() > 0);
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
     bool connected = false;
     if (s_have_credentials) {
-        connected = try_connect_station(ssid, pass);
+        connected = try_all_networks();
     } else {
         ESP_LOGI(TAG, "No WiFi credentials configured — starting SoftAP for setup");
     }

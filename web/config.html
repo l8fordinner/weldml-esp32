@@ -29,7 +29,11 @@
     <input type="url" id="ota_url" name="ota_url"
            placeholder="http://server.example.com/firmware.bin">
 
-    <label for="tb_token">ThingsBoard Access Token</label>
+    <label for="tb_url">Server URL</label>
+    <input type="text" id="tb_url" name="tb_url"
+           placeholder="iot.mwe-inc.com">
+
+    <label for="tb_token">Server Access Token</label>
     <input type="password" id="tb_token" name="tb_token"
            placeholder="device access token" autocomplete="off">
 
@@ -47,6 +51,7 @@ document.getElementById('config-form').addEventListener('submit', async e => {
     const res = await postJSON('/api/config', {
       mqtt_url:  document.getElementById('mqtt_url').value,
       ota_url:   document.getElementById('ota_url').value,
+      tb_url:    document.getElementById('tb_url').value,
       tb_token:  document.getElementById('tb_token').value,
     });
     showStatus(res.ok ? 'Saved.' : 'Error saving config.', res.ok ? 'ok' : 'error');
