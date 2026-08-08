@@ -422,6 +422,40 @@ flagged as a leak but not stress-tested either).
 
 ---
 
+## 2-Minute SoftAP-Fallback Timing Test (2026-08-08)
+
+**What was tested:** the steady-state outage → SoftAP fallback behavior added in the
+`dceb48f` `wifi_provision` rewrite (2-minute threshold before an already-connected device
+brings up its SoftAP, background retry cycling the whole saved-network list every 30s
+afterward) — flagged unverified in every handoff since it was written, because it requires
+real wall-clock waiting.
+
+**Method:** rather than disrupt the user's real home WiFi router, added the workbench Pi's
+own test AP (`wb-fallback-test`) as a saved network via `POST /api/wifi` (promotes to front,
+tried first) — device rebooted and connected to it at `192.168.4.15`, confirmed via
+`GET /api/status`. Stopped the workbench AP (`POST /api/wifi/ap_stop`) to simulate an outage
+of the currently-active network without touching the user's own network at all, then polled
+`GET /api/wifi/scan` on the workbench every 8s watching for `weldml-esp32_1` to appear/disappear.
+
+| Test | Result | Notes |
+|------|--------|-------|
+| No premature SoftAP during the "quick retry" phase | PASS | Nothing appeared for the first ~90s of the outage |
+| SoftAP appears after the 2-minute threshold | PASS (timing approximate) | Observed at outage+~97-124s depending on measurement start-time uncertainty (a few seconds of tool-call latency between issuing the outage and arming the poll watcher) — consistent with the intended 120000ms threshold, not pinned to the exact millisecond. The device's own `ESP_LOGW("Disconnected for %lld ms...")` would give the precise value but wasn't captured live this run |
+| Background retry cycles the *whole* saved-network list (this session's new behavior), not just the last-tried network | PASS | Device recovered onto `Other` (the second saved entry) without ever being told about it directly during the outage — confirms the `try_all_networks()`-in-monitor-task change actually works on hardware, not just in the boot-time path |
+| SoftAP drops once reconnected | PASS | Disappeared at outage+177s; the ~53s gap after the 2-minute mark is consistent with one failed 30s retry cycle (still trying the dead `wb-fallback-test` first each cycle) before a second cycle reached `Other` and succeeded |
+| Device stayed up throughout, no reboot | PASS | `uptime_ms` climbed continuously across the whole test (263564ms at the end) |
+
+**Cleanup:** removed `wb-fallback-test` from the saved list (`POST /api/wifi/delete`) and
+stopped the workbench AP afterward — device's saved list is back to `["Other"]` only, matching
+normal operation.
+
+**Not verified this session:** the exact millisecond precision of the 2-minute threshold (see
+above); behavior when *no* fallback network exists at all (list would just stay empty after
+deletion and the device would sit in AP-fallback forever, never verified live); repeated
+outage/recovery cycles back-to-back (only one full cycle was exercised).
+
+---
+
 ## Deferred to Product Fork
 
 These items are not part of the base template and do not need to be tested here:
