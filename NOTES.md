@@ -488,6 +488,53 @@ was never exercised with real timing on hardware; repeated rapid Clear requests 
 
 ---
 
+## Milestone 3 Ticket #9 — CPU-Contention Protection, Hardware Re-Verification (2026-08-08)
+
+**Change:** `weld_processor.c` brackets the write-idle SD-ownership window with
+`webserver_stop()`/`webserver_start()` (zero WiFi/HTTP task activity during processing;
+re-registers weld_processor's own endpoints on the way back out, since `webserver_stop()`
+also tears down SPIFFS). Defense in depth: `weld_mon` raised from priority 5 to 10 and
+pinned to core 1 (matches `CONFIG_TINYUSB_TASK_AFFINITY_CPU1`; WiFi's internal task is
+pinned to core 0). A mid-flight `POST /api/upload` is now waited out (bounded to 16s)
+before `webserver_stop()` is called, since `httpd_stop()` itself blocks its caller until
+the single synchronous httpd task is free — found during code review, not part of the
+original ticket text. Resolves `docs/OPEN_QUESTIONS.md` Q21.
+
+**Hardware test (Waveshare ESP32-S3-LCD-1.47, Pi workbench SLOT3, firmware `e40337c`,
+WiFi connected to `Other`, webserver active throughout):**
+
+| Fixture | Run | `parse_ms` | `features_ms` | Total | Classification |
+|---|---|---|---|---|---|
+| `l060.fsj` (LOOCV/NP) | 1 | 1,773 | 3,903 | 5,676 ms | NP ✓ |
+| `l060.fsj` (LOOCV/NP) | 2 | 1,780 | 3,885 | 5,665 ms | NP ✓ |
+| `l046.fsj` (LOOCV/IF) | 1 | 874 | 2,044 | 2,918 ms | IF ✓ |
+| `l046.fsj` (LOOCV/IF) | 2 | 878 | 2,044 | 2,922 ms | IF ✓ |
+
+Two runs per fixture happened because an identically-named `.fsj` was already left on the
+SD card from earlier testing — mounting the card to copy the new file triggered one
+reprocessing pass of the stale file, then the `cp` overwrite triggered a second, genuine
+pass. Not a bug; both runs are independent, valid measurements.
+
+**Result:** No regression against the 2026-07-23 baseline (`l060.fsj`: `parse_ms` 2,004 ms,
+`features_ms` 3,859 ms, total ~5.9 s) — total time for `l060.fsj` was actually slightly
+*lower* under this change (~5.67 s), consistent with the webserver being fully stopped
+(rather than time-sliced against equal-priority WiFi/HTTP tasks) during the window. Four
+processing cycles ran across ~130 s of continuous uptime (`uptime_ms` 63,007 → 193,611,
+monotonic, no gaps) with zero Task Watchdog resets and zero crashes — the priority-10/
+core-1 defense-in-depth layer flagged as a WDT-starvation risk during code review did not
+manifest; `features_ms` stayed well under the 5 s `CONFIG_ESP_TASK_WDT_TIMEOUT_S` window
+each time. `GET /api/results` correctly returned all 4 cached rows afterward, confirming
+`webserver_start()` + endpoint re-registration succeeded on every one of the 4 window
+exits, not just the first.
+
+**Not verified this session:** the mid-flight-upload wait added during code review
+(`s_upload_in_progress`) — never exercised on hardware, since no `POST /api/upload` was
+in flight at the moment a write-idle window elapsed during this test. The logic is
+straightforward (bounded poll loop) but the actual race condition it defends against
+was not reproduced.
+
+---
+
 ## Deferred to Product Fork
 
 These items are not part of the base template and do not need to be tested here:

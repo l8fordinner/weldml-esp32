@@ -649,9 +649,9 @@ trigger during that window for free, since it's only reachable through the web U
 actual usage: the web UI is for viewing results and triggering upload/OTA/cleanup while idle —
 between welds or once a session is finished — not during an active write. (2) Defense in depth:
 raise `weld_mon`'s priority above the WiFi/httpd/OTA default and pin it to core 1 (WiFi's own
-internal tasks default to core 0). **Not yet hardware-verified** — the l060.fsj/l046.fsj timing
-tests must be re-run with WiFi/webserver active once implemented, and `NOTES.md` updated, before
-claiming this works.
+internal tasks default to core 0). **Hardware-verified 2026-08-08** (ticket #9/issue #9) — the
+l060.fsj/l046.fsj timing tests were re-run with WiFi/webserver active, showing no regression
+from the pre-change baseline; see `NOTES.md`'s Ticket #9 section for full results.
 
 ---
 
@@ -772,7 +772,7 @@ existing.
 | Q18 | **Resolved** | Firmware versioning: ESP-IDF git-describe (CONFIG_APP_PROJECT_VER_FROM_GIT). | 2026-08-06 |
 | Q19 | **Resolved** | Checksum mismatch = hard abort; ESP-IDF app rollback with "healthy" = reaching weld_processor_start() in main.c. | 2026-08-06 |
 | Q20 | **Resolved** | Partition table: otadata(8K)+ota_0(3M)+ota_1(3M)+spiffs(2M), ~8.4MB of 16MB flash. | 2026-08-06 |
-| Q21 | **Resolved** | webserver_stop()/start() bracket the existing write-idle window to eliminate WiFi/HTTP CPU contention with weld_mon; priority+core-pinning as defense in depth. Not yet hardware-verified. | 2026-08-06 |
+| Q21 | **Resolved** | webserver_stop()/start() bracket the existing write-idle window to eliminate WiFi/HTTP CPU contention with weld_mon; priority+core-pinning as defense in depth. Hardware-verified 2026-08-08. | 2026-08-06 |
 | Q22 | **Resolved** | weld_cloud payload: extend CSV/cache to all 22 features (deliberate MVP-touching change); upload ts comes from the .fsj file's own embedded timestamp, fixed Central (UTC-6, no DST). | 2026-08-06 |
 | Q23 | **Resolved** | Results-table cache (issue #4) is incremental, never re-derived from weldml_results.csv history, during normal operation. Clear (issue #6) now truncates the CSV directly too — see Q14/Q24. | 2026-08-06 |
 | Q24 | **Resolved** | Clear is gated: refuses by default if watermark < cache row count (unsent data present), reports the unsent count; explicit override available for watermark-glitch cases the operator has manually verified against the ThingsBoard dashboard. | 2026-08-06 |
