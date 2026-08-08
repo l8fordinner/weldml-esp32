@@ -84,6 +84,16 @@ static uint32_t s_results_cache_evicted = 0;
 static volatile uint32_t s_last_write_ms = 0;
 static volatile bool     s_write_seen    = false;
 
+/*
+ * Ticket #6 (Clear) pending-flag hand-off. Same single-writer-then-read
+ * pattern as s_last_write_ms/s_write_seen above -- handler_api_clear() (HTTP
+ * server task) has already fully resolved the force/allowed decision by the
+ * time it sets this; monitor_task (app task) just needs to know "do it,"
+ * during the same write-idle-safe window #4's caching already uses -- see
+ * process_clear().
+ */
+static volatile bool s_clear_pending = false;
+
 static weld_state_t s_state = WELD_STATE_WAITING;
 
 /*
@@ -510,6 +520,49 @@ static void process_sd(void)
     set_state(WELD_STATE_WAITING);
 }
 
+/*
+ * Ticket #6 -- performs the actual Clear (truncate CSV + empty cache + reset
+ * watermark), only ever called from monitor_task during the same write-idle
+ * window process_sd() uses, and behind the same tinyusb_msc_storage_mount()/
+ * unmount() bracket -- no new SD ownership state. .fsj source files are never
+ * touched by this function or anything it calls.
+ */
+static void process_clear(void)
+{
+    esp_err_t err = tinyusb_msc_storage_mount(SD_MOUNT);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Clear: FatFS mount failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+    FILE *csv = fopen(RESULTS_CSV_PATH, "w");
+    if (csv) {
+        write_csv_header(csv);
+        fflush(csv);
+        fclose(csv);
+        ESP_LOGI(TAG, "Clear: %s truncated to header-only", RESULTS_CSV_PATH);
+    } else {
+        ESP_LOGE(TAG, "Clear: fopen(%s) failed errno=%d", RESULTS_CSV_PATH, errno);
+    }
+
+    tinyusb_msc_storage_unmount();
+
+    if (xSemaphoreTake(s_cache_mutex, portMAX_DELAY) == pdTRUE) {
+        s_results_cache_count = 0;
+        s_results_cache_evicted = 0;
+        xSemaphoreGive(s_cache_mutex);
+    }
+
+    nvs_handle_t nvs;
+    if (nvs_open("config", NVS_READWRITE, &nvs) == ESP_OK) {
+        nvs_set_u32(nvs, "tb_watermark", 0);
+        nvs_commit(nvs);
+        nvs_close(nvs);
+    }
+
+    ESP_LOGI(TAG, "Clear complete — cache emptied, upload watermark reset");
+}
+
 static void monitor_task(void *arg)
 {
     ESP_LOGI(TAG, "Write-idle monitor started — idle window: %d ms", IDLE_WINDOW_MS);
@@ -518,6 +571,10 @@ static void monitor_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(250));
 
         if (!s_write_seen) {
+            if (s_clear_pending) {
+                process_clear();
+                s_clear_pending = false;
+            }
             continue;
         }
 
@@ -531,6 +588,10 @@ static void monitor_task(void *arg)
         } else {
             /* Idle window elapsed — take SD ownership and process. */
             process_sd();
+            if (s_clear_pending) {
+                process_clear();
+                s_clear_pending = false;
+            }
             s_write_seen = false;
             /* LCD is now GREEN (success) or RED (failure). */
         }
@@ -708,6 +769,58 @@ static esp_err_t handler_api_upload(httpd_req_t *req)
     return ESP_OK;
 }
 
+/*
+ * POST /api/clear -- ticket #6. Gated on weld_cloud's upload watermark vs.
+ * the cache row count (docs/OPEN_QUESTIONS.md Q24): refuses by default with
+ * unsent rows present, unless {"force":true} is passed. Never touches the
+ * SD card directly -- only sets a pending flag; monitor_task performs the
+ * actual truncation during its existing write-idle window (process_clear()).
+ */
+static esp_err_t handler_api_clear(httpd_req_t *req)
+{
+    char body[64] = {0};
+    int ret = httpd_req_recv(req, body, sizeof(body) - 1);
+    bool force = (ret > 0) && (strstr(body, "\"force\":true") || strstr(body, "\"force\": true"));
+
+    uint32_t global_watermark = 0;
+    nvs_handle_t nvs;
+    if (nvs_open("config", NVS_READONLY, &nvs) == ESP_OK) {
+        nvs_get_u32(nvs, "tb_watermark", &global_watermark);
+        nvs_close(nvs);
+    }
+
+    size_t row_count = 0;
+    uint32_t local_watermark = 0;
+    if (xSemaphoreTake(s_cache_mutex, portMAX_DELAY) == pdTRUE) {
+        row_count = s_results_cache_count;
+        /* Global -> local (array-index) watermark, same eviction-offset
+         * conversion as handler_api_upload() -- see the comment above
+         * s_results_cache_evicted. */
+        uint32_t evicted = s_results_cache_evicted;
+        local_watermark = (global_watermark > evicted) ? (global_watermark - evicted) : 0;
+        xSemaphoreGive(s_cache_mutex);
+    }
+
+    size_t unsent = 0;
+    bool allowed = weld_cloud_check_clear_allowed(local_watermark, row_count, force, &unsent);
+
+    httpd_resp_set_type(req, "application/json");
+    char resp[128];
+    if (!allowed) {
+        snprintf(resp, sizeof(resp),
+                 "{\"ok\":false,\"error\":\"unsent rows present\",\"unsent\":%u}",
+                 (unsigned)unsent);
+        httpd_resp_sendstr(req, resp);
+        return ESP_OK;
+    }
+
+    s_clear_pending = true;
+    httpd_resp_sendstr(req, "{\"ok\":true,\"message\":\"Clear requested.\"}");
+    ESP_LOGI(TAG, "Clear requested (force=%d, unsent=%u) — will apply during the next idle window",
+             force, (unsigned)unsent);
+    return ESP_OK;
+}
+
 esp_err_t weld_processor_register_web_endpoints(void)
 {
     static const httpd_uri_t s_results_uri = {
@@ -725,6 +838,11 @@ esp_err_t weld_processor_register_web_endpoints(void)
         .method = HTTP_POST,
         .handler = handler_api_upload,
     };
+    static const httpd_uri_t s_clear_uri = {
+        .uri = "/api/clear",
+        .method = HTTP_POST,
+        .handler = handler_api_clear,
+    };
 
     esp_err_t err = webserver_register_uri(&s_results_uri);
     if (err != ESP_OK) {
@@ -734,5 +852,9 @@ esp_err_t weld_processor_register_web_endpoints(void)
     if (err != ESP_OK) {
         return err;
     }
-    return webserver_register_uri(&s_upload_uri);
+    err = webserver_register_uri(&s_upload_uri);
+    if (err != ESP_OK) {
+        return err;
+    }
+    return webserver_register_uri(&s_clear_uri);
 }

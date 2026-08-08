@@ -456,6 +456,38 @@ outage/recovery cycles back-to-back (only one full cycle was exercised).
 
 ---
 
+## Ticket #6 — Clear Button (2026-08-08)
+
+**Change:** New `POST /api/clear` in `weld_processor.c`, gated by `weld_cloud_check_clear_allowed()`
+(pure logic, TDD'd in an earlier session) against the same global-watermark/eviction-offset
+conversion `handler_api_upload()` already uses. The HTTP handler only ever sets a pending flag
+(`s_clear_pending`) — never opens the SD card itself. `monitor_task`'s write-idle loop now also
+checks that flag in both branches (when idle with no write activity at all, and right after
+`process_sd()` finishes), running the actual work (`process_clear()`: truncate
+`weldml_results.csv` to header-only, empty the in-memory cache, reset the NVS upload watermark
+to 0) inside the same `tinyusb_msc_storage_mount()`/`tinyusb_msc_storage_unmount()` bracket
+`process_sd()` already uses for its own SD access — no new SD ownership state. `results.html`
+got a Clear button; when unsent rows are reported, a warning + "Clear Anyway" override button
+appears.
+
+**Hardware test (Waveshare ESP32-S3-LCD-1.47, Pi workbench SLOT3):**
+
+| Test | Result | Notes |
+|------|--------|-------|
+| Build + host tests (`weld_cloud`) | PASS | Zero warnings; host tests unaffected (hardware-glue only, no changes to the already-tested pure-logic function) |
+| Refused path (unsent rows, no override) | PASS | `POST /api/clear` → `{"ok":false,"error":"unsent rows present","unsent":1}`; confirmed both the cache and `weldml_results.csv` on the SD card completely unchanged (22 lines, all prior rows intact) |
+| Normal path (all sent, no override) | PASS | Succeeded, CSV truncated to exactly 1 line (header-only). Watermark reset verified with a *discriminating* test, not just an empty cache: added one more fresh row, uploaded it, got `{"ok":true,"uploaded":1}` — only possible if the watermark genuinely reset to 0 (a stale un-reset watermark would have wrongly suppressed this identical-count case as already-sent) |
+| Override path (unsent rows, force:true) | PASS | Cleared anyway; CSV truncated, cache emptied |
+| `.fsj` source files never touched | PASS | `l046.fsj`/`l060.fsj`/`l314.fsj` confirmed present and unchanged throughout every scenario |
+| Web UI (real browser, not just API) | PASS | User confirmed the warning + "Clear Anyway" button appear correctly for the unsent-rows case, and independently exercised the Upload-then-Clear normal path themselves through the UI |
+
+**Not verified this session:** concurrent Clear-while-actively-writing (i.e. requesting Clear
+during the ~5s `IDLE_WINDOW_MS` debounce right after a real MSC write, before `process_sd()`
+runs) — the code path exists (checked again right after `process_sd()` in the same window) but
+was never exercised with real timing on hardware; repeated rapid Clear requests back-to-back.
+
+---
+
 ## Deferred to Product Fork
 
 These items are not part of the base template and do not need to be tested here:

@@ -41,6 +41,16 @@
   <p id="status-msg"></p>
 </div>
 
+<div class="card">
+  <h2>Clear Extracted Data</h2>
+  <p style="margin-bottom:0.75rem; font-size:0.85rem; color:var(--muted);">
+    Truncates the results log and cache. Never deletes .fsj source files from the SD card.
+  </p>
+  <button id="clear-btn" type="button">Clear</button>
+  <button id="clear-force-btn" type="button" class="danger" style="display:none;">Clear Anyway</button>
+  <p id="clear-status-msg"></p>
+</div>
+
 <script src="/app.js"></script>
 <script>
 async function loadResults() {
@@ -78,6 +88,37 @@ document.getElementById('upload-btn').addEventListener('click', async () => {
     showStatus('Failed: ' + err.message, 'error');
   }
 });
+
+function setClearStatus(msg, type) {
+  const el = document.getElementById('clear-status-msg');
+  el.textContent = msg;
+  el.className = type || '';
+}
+
+async function requestClear(force) {
+  setClearStatus(force ? 'Clearing (override)…' : 'Clearing…', '');
+  document.getElementById('clear-force-btn').style.display = 'none';
+  try {
+    const res = await postJSON('/api/clear', force ? { force: true } : {});
+    if (res.ok) {
+      setClearStatus('Cleared. Table will update shortly.', 'ok');
+      setTimeout(loadResults, 1000);
+    } else if (res.error === 'unsent rows present') {
+      setClearStatus(
+        `${res.unsent} unsent row${res.unsent === 1 ? '' : 's'} — upload first, or clear anyway and lose them:`,
+        'error'
+      );
+      document.getElementById('clear-force-btn').style.display = 'inline-block';
+    } else {
+      setClearStatus('Failed: ' + (res.error || 'unknown error'), 'error');
+    }
+  } catch (err) {
+    setClearStatus('Failed: ' + err.message, 'error');
+  }
+}
+
+document.getElementById('clear-btn').addEventListener('click', () => requestClear(false));
+document.getElementById('clear-force-btn').addEventListener('click', () => requestClear(true));
 
 loadResults();
 setInterval(loadResults, 10000);
