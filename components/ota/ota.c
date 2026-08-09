@@ -186,7 +186,7 @@ static bool fetch_shared_attributes(const char *tb_host, const char *tb_token,
 
 /*
  * Ticket #10: real ThingsBoard-backed download + checksum-gated flash.
- * Fetches fw_title/fw_version/fw_checksum/fw_checksumAlgorithm fresh (not
+ * Fetches fw_title/fw_version/fw_checksum/fw_checksum_algorithm fresh (not
  * cached from an earlier ota_check_update() call -- avoids acting on stale
  * attributes between the user viewing "Update available" and clicking the
  * button), downloads the image into the inactive OTA partition while
@@ -225,7 +225,7 @@ static void run_update(void)
 
     char attr_resp[512];
     if (!fetch_shared_attributes(tb_host, tb_token,
-                                  "fw_title,fw_version,fw_checksum,fw_checksumAlgorithm",
+                                  "fw_title,fw_version,fw_checksum,fw_checksum_algorithm",
                                   attr_resp, sizeof(attr_resp))) {
         set_failed("could not fetch firmware attributes");
         return;
@@ -238,7 +238,7 @@ static void run_update(void)
     json_str_field(attr_resp, "fw_title", fw_title, sizeof(fw_title));
     json_str_field(attr_resp, "fw_version", fw_version, sizeof(fw_version));
     json_str_field(attr_resp, "fw_checksum", fw_checksum, sizeof(fw_checksum));
-    json_str_field(attr_resp, "fw_checksumAlgorithm", fw_algorithm, sizeof(fw_algorithm));
+    json_str_field(attr_resp, "fw_checksum_algorithm", fw_algorithm, sizeof(fw_algorithm));
 
     if (fw_title[0] == '\0' || fw_version[0] == '\0') {
         set_failed("no firmware package configured");
@@ -353,7 +353,13 @@ static void run_update(void)
     }
 
     if (!ota_policy_verify_checksum(computed_hex, fw_checksum, fw_algorithm)) {
-        /* Hard precondition (Q19): never mark this partition bootable. */
+        /* Hard precondition (Q19): never mark this partition bootable. Log
+         * both values -- neither is secret (a firmware checksum, not a
+         * credential) -- since "checksum verification failed" alone gives no
+         * way to tell a real corrupt download from an algorithm-name/format
+         * mismatch against what ThingsBoard actually advertised. */
+        ESP_LOGE(TAG, "Checksum mismatch: computed=%s expected=%s algorithm=%s",
+                 computed_hex, fw_checksum, fw_algorithm);
         esp_ota_abort(ota_handle);
         set_failed("checksum verification failed");
         return;
