@@ -615,6 +615,19 @@ the existing point in `main.c` where LCD init and SD/USB-MSC init both succeed a
 init failure already halts and shows solid RED today). If the app never reaches that point, the
 bootloader auto-reverts to the previous good partition on next reset.
 
+**Checksum-gate hardware-verified 2026-08-08** (ticket #10/issue #10): a real OTA package
+(`weldml-esp32`/`ota-test-1`) was uploaded via ThingsBoard's own admin UI and assigned to
+`weldml-esp32-lab-01`. First attempt genuinely failed closed — not a corrupt download, but a
+real bug: the implementation fetched `fw_checksumAlgorithm` (camelCase) instead of this
+question's own correctly-specified `fw_checksum_algorithm` (snake_case), so the algorithm
+came back empty and `ota_policy_verify_checksum()` correctly refused to trust an unverifiable
+checksum. Fixed (commit `9771a7f`); re-tested twice more, both succeeding end-to-end
+(download → verify → flash → reboot → new partition running), confirmed via `/api/status`'s
+version field and, separately, live in a real browser (`/ota` showing Downloading… →
+Verifying… → Success — rebooting, not just JSON). **Rollback itself (a broken image actually
+triggering bootloader auto-revert) is deliberately not tested here — that is ticket #11's
+explicit job**, blocked on this ticket. See `NOTES.md`'s Ticket #10 section for full results.
+
 ---
 
 ## Q20: Flash Partition Table — OTA + SPIFFS Layout

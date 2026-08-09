@@ -535,6 +535,48 @@ was not reproduced.
 
 ---
 
+## Milestone 3 Ticket #10 — Real OTA Download + Checksum Gate + Rollback (2026-08-08)
+
+**Change:** `ota.c` fetches `fw_title`/`fw_version`/`fw_checksum`/`fw_checksum_algorithm`
+fresh from ThingsBoard at trigger time, streams the firmware into the inactive OTA partition
+while accumulating a SHA-256 hash of the exact bytes written, and only calls
+`esp_ota_set_boot_partition()` if that hash matches the advertised checksum and
+`esp_ota_end()`'s own image-structure validation both pass — any mismatch calls
+`esp_ota_abort()` instead, per `docs/OPEN_QUESTIONS.md` Q19. `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`
+enabled; `main.c` calls `esp_ota_mark_app_valid_cancel_rollback()` at the existing
+LCD+SD-init-succeeded gate, before `weld_processor_start()`. Web UI (`/ota`) polls
+`/api/status` for live Downloading…/Verifying…/Success — rebooting/Failed states.
+
+**Hardware test (Waveshare ESP32-S3-LCD-1.47, Pi workbench SLOT3):**
+
+| Test | Result | Notes |
+|---|---|---|
+| Build (`idf.py -D BOARD=waveshare-esp32-s3-lcd-147 build`) | PASS | Zero errors/warnings |
+| Host tests (`weld_cloud`/`weld_inference`/`ota_policy`, 9 new checksum-verify assertions) | PASS | `test_weld_parser_features` still fails on the pre-existing, unrelated issue #7 |
+| Real OTA package created via ThingsBoard's own admin UI (not the MCP upload tool — still blocked by the same host-filesystem `filePath` limitation as the ticket #8 session) | PASS | `weldml-esp32`/`ota-test-1`, SHA256, assigned to `weldml-esp32-lab-01` via its device-profile-inherited "Assigned firmware" field |
+| First real OTA attempt | FAIL (expected — real bug found) | `fw_checksumAlgorithm` (camelCase) used instead of the already-correctly-specified `fw_checksum_algorithm` (snake_case) in Q19/Q17 — algorithm came back empty, `ota_policy_verify_checksum()` correctly failed closed rather than trust an unverifiable checksum. Confirmed via the checksum ThingsBoard's UI displayed matching the locally-computed SHA256 of the exact same binary — proved the download/hash pipeline was correct and the bug was purely the attribute key name. Fixed, commit `9771a7f`. |
+| Real OTA attempt after fix (×2) | PASS | Full cycle both times: fetched real attributes, downloaded the real package, computed SHA-256 matched ThingsBoard's advertised checksum, `esp_ota_end()` validated, boot partition switched, rebooted. Confirmed via `/api/status`'s version field changing and `uptime_ms` resetting (genuine reboot, not a no-op) |
+| Live web UI status (real browser, not just JSON) | PASS — user confirmed | Second post-fix attempt: user watched `/ota` show "Downloading…" → "Verifying…" → "Success — rebooting" in sequence, matching all four required states. (First post-fix attempt's UI wasn't clearly observed by the user — likely just missed given the page wasn't watched continuously; the backend state transitions were independently confirmed via polling both times regardless) |
+| Manual-trigger-only (no automatic/unattended update) | PASS by construction | Only reachable via `POST /api/ota`, itself only called from the web UI button click |
+
+**Not verified this session:** the mid-flight-weld-write guard (`g_weld_write_active` check in
+`run_update()`, added during code review per the CLAUDE.md flash-safety rule) — never exercised
+against a real concurrent USB-MSC write, since no weld cycle was triggered during any OTA
+attempt this session. Also not tested: rollback itself (a broken image actually failing to
+confirm and the bootloader auto-reverting) — that is ticket #11's explicit, separate job.
+
+**Testing artifact, not a product concern:** the `ota-test-1` package's binary content is the
+*original pre-fix* build (uploaded before the `fw_checksum_algorithm` bug was found), so every
+time OTA succeeds against it, the device lands back on that old binary — which will then fail
+the *next* OTA attempt again (same already-fixed bug, just re-encountered because the package
+itself was never re-uploaded). This caused real confusion mid-session (repeated flash cycles
+to get back to a clean state) but only affects this specific stale test package; a real release
+build will never have this problem since the fix ships as part of it. Device was left on the
+fixed build (`9771a7f`) on both OTA partitions at the end of this session, deliberately, so a
+future OTA attempt won't immediately re-trigger this already-fixed bug.
+
+---
+
 ## Deferred to Product Fork
 
 These items are not part of the base template and do not need to be tested here:
