@@ -761,6 +761,72 @@ existing.
 
 ---
 
+## Q25: WiFi Does Not Reliably Reconnect After an EN-Pin-Only Reset (Key2)
+
+**Question:** During ticket #11's hardware-verified rollback test (2026-08-12), WiFi
+consistently failed to reconnect after a Key2 (EN-pin-only) reset, even though the application
+itself booted correctly every time — the LCD reached "Ready", proving `weld_processor_start()`
+succeeded. This happened at least twice in one session: once after the rollback-proving Key2
+press (WiFi silent for 5+ minutes, no SoftAP fallback either), and again after a routine
+post-cleanup `ota_1` reflash. In both cases, a full USB unplug/replug from the Pi hub fixed it
+immediately; a bare Key2 press sometimes did not. Root cause is unknown — possibly a WiFi/RF
+calibration state issue tied to reset type, but that is speculation, not evidence. Not the same
+issue as the DTR/RTS serial-port-interference confound found the same session (see `NOTES.md`
+Milestone 3 Ticket #11) — that affects the bootloader-select path via the workbench's RFC2217
+proxy; this is the application's WiFi stack failing to come up after a specific reset type.
+
+**Status: Open.** Needs dedicated investigation in a future session — likely requires comparing
+WiFi/RF init behavior across a power-on reset, a Key2 (EN-pin) reset, and a full USB
+unplug/replug, on real hardware. Do not assume this is fixed by anything done in ticket #11's
+session; it was only observed and worked around, never root-caused.
+
+**Update (2026-08-12, same-day retest):** two clean single-Key2-press trials during ticket #11's
+retest both reconnected WiFi within ~10s, no unplug/replug needed — the opposite of the two
+original-session occurrences. Confirms this is intermittent, not deterministic-on-Key2-reset;
+doesn't narrow the root cause. Still open.
+
+---
+
+## Q26: CI/CD — Auto-Push Firmware Builds to ThingsBoard OTA Packages
+
+**Question:** Every OTA package used for testing so far (`ota-test-1`, `ota-test-broken-11`, and
+ticket #11's retest package) has required a fully manual round trip: build locally, compute a
+checksum, hand the `.bin` file and its metadata to the user, who then creates and uploads the
+package themselves through ThingsBoard's admin UI, because `saveOtaPackageData`'s `filePath`
+parameter refers to the MCP server's own sandboxed container filesystem and can't see any path
+on this side (see `[[reference_thingsboard_mcp]]` memory). Raised by the user during ticket #11's
+retest (2026-08-12): should a GitHub Action build firmware on push/tag and push it straight to
+ThingsBoard via their REST OTA-package API (create package + upload binary data in one
+authenticated call), eliminating this manual step for good — not just for test builds, but for
+real releases too?
+
+**Ruled out as a shortcut:** ThingsBoard's built-in "Version Control" feature (Advanced Features →
+Version Control, tenant-level Git export/import) does **not** cover OTA packages/firmware — it
+only supports Device, Asset, Entity View, Customer, Dashboard, Widget Bundle, and Rule Chain
+entities. It cannot be repurposed for this; a real CI integration against ThingsBoard's REST API
+is the only path.
+
+**Open sub-questions, not yet decided:**
+- **Trigger:** every push to `main`, or tag-only (release builds)? Given Q18's git-describe
+  versioning convention, tag-only would keep OTA package versions meaningfully distinct from
+  every WIP commit, but every-push would give faster test-package turnaround for hardware
+  verification sessions like this one.
+- **Credentials:** where does a ThingsBoard service-account token live as a GitHub Actions
+  secret, and is a dedicated, scoped service account required, or is reusing the same
+  tenant-admin credentials already used interactively acceptable?
+- **Version-string mapping:** does the CI-pushed package's `version` field use the raw
+  git-describe string (matching what the firmware itself reports, per Q18), or a separate
+  human-readable release tag?
+- **Test vs. release packages:** should CI-pushed packages be distinguishable from manually
+  created test packages (like this session's `ota-test-broken-11-retest`), e.g. by a naming
+  convention or a separate "channel," so a real device's "Assigned firmware" field is never
+  accidentally pointed at a CI test build?
+
+**Status: Open — not started.** No decision made yet on any of the above; purely a good idea
+raised in passing, not yet scoped or committed to.
+
+---
+
 ## Resolution Log
 
 | Q | Status | Decision | Date |

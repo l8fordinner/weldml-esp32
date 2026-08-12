@@ -577,6 +577,108 @@ future OTA attempt won't immediately re-trigger this already-fixed bug.
 
 ---
 
+## Milestone 3 Ticket #11 — Rollback Test — CONFIRMED via two clean, repeatable single-reset trials (2026-08-12)
+
+**Status:** Originally closed on the strength of one confounded session (see "Original session"
+below), then reopened after review showed that close overstated the evidence — only one of that
+session's trials was actually clean. A same-day retest fixed this: two independent trials, each a
+fresh broken-image OTA push followed by exactly **one** Key2 press, both immediately confirmed via
+LCD redraw and `/api/ota/check`, with no ambiguity and no confound. See "Retest" below for the
+clean result; the "Original session" table is kept for the record but should not be cited alone.
+
+**Retest (2026-08-12, same day, after reopening):** Rebuilt the same deliberate-hang broken image
+on a fresh throwaway branch (`test/ticket-11-retest-broken-ota`, never merged), uploaded as a new
+distinct ThingsBoard package (`ota-test-broken-11-retest`) per the same never-overwrite convention.
+Two trials, both against the live device:
+
+| Trial | Reset | LCD result | `/api/status` uptime | `/api/ota/check` result |
+|---|---|---|---|---|
+| 1 | 1× Key2 | Fresh "Ready" redraw (was frozen/dark before reset) | 10584 ms | `current: "11f4a37-dirty"`, not the broken version |
+| 2 | 1× Key2 | Fresh "Ready" redraw | 9318 ms | `current: "11f4a37-dirty"`, not the broken version |
+
+Both trials: single reset, immediate LCD redraw (impossible for the broken image, which never
+touches the LCD), immediate WiFi/HTTP confirmation — no unplug/replug needed either time, unlike
+the original session. **This is the clean, repeatable confirmation the reopened issue asked for.**
+`ota_1` was reflashed back to the good build afterward (hash-verified) to restore the standard
+both-partitions-good end-of-ticket state — this step was interrupted once by an unrelated Pi
+workbench network outage (Pi became fully unreachable mid-flash, unrelated to anything ESP32-side;
+resolved by the user power-cycling the workbench, board came back up cleanly on its own with no
+data loss since the interrupted operation was the cosmetic `ota_1` reflash, not anything touching
+`ota_0` or the rollback result itself) and once by the board landing back in USB download-mode
+after a flash's auto-reset didn't take (cleared by one plain Key2 press, no data loss).
+
+**Original session (2026-08-12, earlier the same day) — kept for the record, cite the retest above
+instead:** The table below reads as a clean multi-step PASS, but the underlying evidence was
+thinner than that implied: the first OTA-into-broken-image attempt (2× Key2 + 1 Pi power-cycle)
+stayed dark through all three resets and was never actually explained — it was attributed to the
+DTR/RTS serial-port confound below, but that attribution was never verified against what was
+actually done during those three resets, and "rollback doesn't trigger on the first reset" was not
+ruled out. Only the second attempt, a single Key2 press producing a "Ready" LCD screen plus a later
+`/api/ota/check` confirmation, was a clean, unconfounded data point — and it was exactly one trial.
+
+**Purpose:** Ticket #10's session only ever exercised genuinely-valid OTA images. Ticket #11
+exists to prove the ESP-IDF bootloader's app-rollback feature actually auto-reverts to the
+previous working partition when a bad image never reaches
+`esp_ota_mark_app_valid_cancel_rollback()` — never tested before this session.
+
+**Real latent bug found and fixed first:** the local, gitignored `sdkconfig` had an explicit
+`# CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE is not set` line predating commit `8ce9182` (the commit
+that added `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` to `sdkconfig.defaults`). ESP-IDF's defaults
+mechanism never overrides an already-explicit line, even a "not set" one — so the bootloader
+ticket #10's session believed it had enabled and flashed almost certainly never actually had
+rollback compiled in, on any build since 2026-08-07, undetected across two more handoffs because
+that session never exercised the failure path. Fixed by removing the stale lines and running
+`idf.py reconfigure -D BOARD=waveshare-esp32-s3-lcd-147`; confirmed via
+`build/bootloader/config/sdkconfig.h` showing `#define CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE 1`
+(the actual ground truth for what a bootloader *build* contains — the app-level sdkconfig.h does
+not govern bootloader behavior). Full 5-binary reflash (bootloader + partition-table + otadata +
+app + spiffs) via manual download mode + SSH `esptool` to the Pi, all writes hash-verified.
+
+**Hardware test (Waveshare ESP32-S3-LCD-1.47, Pi workbench SLOT3):**
+
+| Test | Result | Notes |
+|---|---|---|
+| Broken image built: `while(1)` loop + one `ESP_LOGE` at the top of `app_main()`, before `nvs_flash_init()`, before the rollback-confirmation gate | N/A (deliberate) | Never committed to `main`; built on a throwaway branch as an uncommitted working-tree edit only |
+| Real OTA package created on ThingsBoard (`weldml-esp32`/`ota-test-broken-11`, distinct from `ota-test-1`, uploaded via the admin UI due to the same MCP host-filesystem `filePath` limitation as ticket #10) | PASS | Assigned to `weldml-esp32-lab-01`; checksum verified matching the local build |
+| OTA push against the fixed (genuine rollback-enabled) bootloader — attempt 1 | INCONCLUSIVE | 2× Key2 + 1 Pi power-cycle, device stayed dark/silent through all three. Presumed caused by the DTR/RTS serial-port confound below, but that was never actually verified — do not treat this attempt as evidence either for or against rollback |
+| OTA push, redone — attempt 2, single Key2 reset | PASS (one trial) | Screen showed "Ready" in normal coloring — structurally impossible for the broken image, which never touches the LCD — real evidence rollback engaged, but only one clean trial so far |
+| `/api/ota/check` after WiFi recovered (attempt 2) | PASS (one trial) | `current: "11f4a37-dirty"`, not `ota-test-broken-11` — confirms the version reverted for this one trial; not yet repeated |
+| Full functionality after revert | PASS | WiFi reconnected, `/`, `/ota`, `/results` all HTTP 200, `/api/results` responding normally |
+| Manual USB reflash (last-resort recovery) | PASS | Exercised for real mid-session as the actual recovery path for the bootloader fix above, not just tested in isolation |
+
+**A confound worth recording for future sessions on this board:** this workbench's RFC2217 proxy
+(`/usr/local/bin/plain_rfc2217_server.py`) passes DTR/RTS straight through to the physical chip
+(a documented ESP32-S3-native-USB workaround). Opening the serial port at all — even passive
+monitoring or `esptool`'s own connect handshake — can silently knock the chip into ROM
+download/bootloader mode as a side effect, independent of whatever firmware is flashed. This
+contaminated several early reset/observation cycles this session before being identified.
+**Workaround: never open this board's serial port for passive observation; use physical
+Key1/Key2 presses for reset and check state only via the device's own HTTP endpoints or the LCD.**
+
+**Not yet root-caused — a genuine new finding:** WiFi does not reliably reconnect after an
+EN-pin-only reset (Key2), even though the app itself boots correctly (LCD reaches "Ready" every
+time). Observed twice this session — once after the rollback-proving Key2 press, once after a
+routine post-cleanup reflash — in both cases a full USB unplug/replug from the Pi hub fixed it
+immediately, while a Key2 press alone sometimes did not. Not the same issue as the DTR/RTS serial
+confound above; this is the application's WiFi stack, not the bootloader-select path. See
+`docs/OPEN_QUESTIONS.md` Q25 (open).
+
+**Cleanup:** device left with the fixed build (`11f4a37-dirty` or later) on both OTA partitions,
+confirmed via a full 5-binary bootloader reflash from this session's original attempt plus a
+directly-verified `ota_1` app-partition reflash after the retest. `weldml-esp32-ticket11-broken.bin`,
+`weldml-esp32-ticket11-retest-broken.bin`, and both throwaway branches
+(`test/ticket-11-broken-ota`, `test/ticket-11-retest-broken-ota`) deleted from the local repo. Both
+ThingsBoard package assignments used this session (`ota-test-broken-11`, `ota-test-broken-11-retest`)
+were deliberately left in place on `weldml-esp32-lab-01` (harmless, manual-trigger-only — same
+treatment as `ota-test-1` after ticket #10).
+
+**Retest bonus finding for Q25:** both retest trials' WiFi came back within ~10s of the single Key2
+press, with no unplug/replug needed — unlike the original session's two occurrences. Not enough to
+call Q25 resolved (2 clean vs. 2 flaky is still a coin flip on this evidence), but worth recording:
+whatever's flaky about post-EN-reset WiFi reconnect, it isn't 100% reproducible on demand.
+
+---
+
 ## Deferred to Product Fork
 
 These items are not part of the base template and do not need to be tested here:
