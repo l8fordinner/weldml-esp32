@@ -72,7 +72,7 @@ If the Pi workbench is the primary flash path, this constraint affects workflow 
 | BOOT button | Not standard | Key1 / GPIO0 |
 | RESET button | Not standard | Key2 / EN |
 | Auto-reset circuit | Via CP2104 RTS/DTR | None |
-| Pi GPIO boot assist | May have been wired | Unknown — must verify |
+| Pi GPIO boot assist | May have been wired | **Not connected** — headers unsoldered so the board fits in its case (confirmed 2026-08-11) |
 | Flash command | `idf.py -p /dev/ttyUSB0 flash` | `idf.py -p /dev/ttyACM0 flash` |
 | Monitor command | `idf.py -p /dev/ttyUSB0 monitor` | `idf.py -p /dev/ttyACM0 monitor` |
 
@@ -89,8 +89,12 @@ These must be confirmed on the actual bench before any automated flash/test cycl
 - [ ] Pi sees `/dev/ttyACM0` when board is in normal run mode
 - [ ] Pi sees the board in esptool download mode after manual BOOT+RESET
 - [ ] `esptool.py chip_id` succeeds via Pi (confirms serial proxy path)
-- [ ] Pi GPIO lines for Key1/Key2, if wired, are confirmed against Waveshare schematic
-- [ ] Pi GPIO polarity and voltage levels are compatible with 3.3 V pull-up on Key1/Key2
+- [x] Pi GPIO lines for Key1/Key2 — **not wired**: headers are unsoldered on this board so
+      it fits in its case (confirmed 2026-08-11, ticket #11 session). `POST /api/gpio/set`
+      against SLOT3's documented EN/BOOT pins (17/18) produces no observable effect on the
+      board — no USB event, no reset — regardless of `slot` param. Do not attempt
+      GPIO-driven reset or download-mode entry on this specific board; go straight to
+      manual Key1/Key2 button press every time.
 - [ ] UDP log capture confirmed working (if native USB is occupied by MSC)
 
 ---
