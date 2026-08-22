@@ -32,7 +32,84 @@ not MVP completion. See the handoff below for the final verification session.
 
 ---
 
-## Session Handoff — 2026-08-12 (Ticket #11 rollback test IN PROGRESS — real rollback confirmed working after fixing a real bootloader-config bug found mid-session; WiFi-after-reset reliability issue still unresolved; cleanup incomplete)
+## Session Handoff — 2026-08-12b (Ticket #11 reclosed with clean retest evidence, Milestone 3 fully closed (#2/#8/#9/#10/#11), then a NEW unscoped ask started mid-session — reporting/display for already-uploaded ThingsBoard telemetry — grilling in progress, not yet a committed plan)
+
+**Branch:** `main`
+**Last commit:** `afe0ac2` — NOTES/OPEN_QUESTIONS: ticket #11 rollback hardware-verified via two clean retest trials
+**Working tree:** CLEAN (untracked `docs/agents/`, `test_data/` — pre-existing, unrelated)
+**Pushed:** yes, `afe0ac2` is on `origin/main`
+
+### Original ask
+
+Resumed via `handoff-resume` from the 2026-08-12 (first) handoff, whose blocker was: `ota_1` had just been reflashed with the good build but its post-flash boot was unconfirmed. This session had three distinct phases, each with its own ask:
+
+1. **Finish ticket #11's cleanup** (from the resumed handoff): confirm the device came back up, delete leftover artifacts, update `NOTES.md`, close issue #11.
+2. **User pushed back hard on the evidence quality** ("How do you figure the rollback works. I had to click on buttons 4 times") — this led to reopening #11 and redoing the hardware test properly, plus two rounds of real, substantive user corrections on ThingsBoard MCP workflow (see below).
+3. **A brand-new, entirely unscoped ask** at the very end of the session: the user wants the already-uploaded-to-ThingsBoard weld features/results (raw 22 features + predicted_class/label/probability, uploaded per file since Milestone 2) to be *visible/reportable* somewhere — a spreadsheet/database/table view, possibly with export/report-pulling capability — and asked whether ThingsBoard itself can do this or whether a separate service is needed. This is being worked via `/mattpocock-skills:grilling` (with `/domain-modeling`, per the `grill-with-docs` wrapper skill) and is **mid-interview, not yet a plan**. See "Deferred items" below for the exact interview state.
+
+### What was attempted / what worked
+
+1. **Confirmed the resumed blocker resolved cleanly**: `ota_1`'s post-flash boot came up fine once the user pressed Key2 (no unplug/replug needed this time) — `/api/status` and `/api/ota/check` both confirmed `11f4a37-dirty` running, WiFi healthy.
+2. **Did ticket #11's cleanup**: deleted `weldml-esp32-ticket11-broken.bin`, deleted the local `test/ticket-11-broken-ota` branch, updated `NOTES.md` with the full ticket #11 test log (bootloader-config bug found/fixed, rollback proof, WiFi-after-reset finding), added `docs/OPEN_QUESTIONS.md` Q25 for the new WiFi finding, closed issue #11 on GitHub with a summary comment.
+3. **User directly challenged the "hardware-verified" claim**: pointed out they'd had to press buttons repeatedly and asked how confident the rollback proof actually was. On honest review, the evidence was genuinely thin — the first OTA-into-broken-image attempt (2× Key2 + 1 Pi power-cycle) stayed dark through all three resets and was **never actually explained**, just attributed to a serial-port DTR/RTS confound found earlier the same session without verifying that attribution against what actually happened during those three resets. Only the second attempt (one Key2 press → LCD "Ready" + `/api/ota/check` confirmation) was a clean, unconfounded trial — and it was exactly one trial, not repeated confirmation. **Reopened issue #11** with a comment stating this plainly, and corrected `NOTES.md` to reflect the same (see `[[project state]]`-style caveat inline in that file — search "Status caveat" if reading pre-retest history).
+4. **Redid the rollback test properly.** Rebuilt the same deliberate-hang broken firmware on a fresh throwaway branch (`test/ticket-11-retest-broken-ota`, never merged — since deleted), created a new distinct ThingsBoard OTA package (`ota-test-broken-11-retest`). **Two independent trials**, each: OTA push into broken image → exactly one Key2 press → check. Both: fresh LCD "Ready" redraw (structurally impossible for the broken image, which never touches the LCD) + `/api/ota/check` confirming `current: "11f4a37-dirty"` within ~10s, no unplug/replug needed either time. This is the actual repeatable, unambiguous proof the ticket needed.
+5. **Two real user corrections on ThingsBoard MCP workflow this session**, both now saved to persistent memory (`[[reference_thingsboard_mcp]]`):
+   - Don't pre-create OTA package metadata via `saveOtaPackageInfo` before the user uploads — in this tenant's UI, attaching binary data to an already-existing metadata-only package doesn't work the same as create-with-upload in one dialog. (User: "you couldn't tell me last time of any way to upload a file to an existing package. But you went and created a new one again.") Corrected by deleting the orphaned package and switching to just handing the user file path/title/version for a single create-and-upload UI action.
+   - Don't tell the user to manually type in a checksum for the upload — ThingsBoard's upload dialog computes it automatically by default. (User: "you put in sha, but default is for it to create one automatically.")
+6. **Reflashed `ota_1` back to the good build** after the retest (matching established end-of-ticket hygiene — both OTA partitions on the same good build). This was interrupted twice by real infrastructure hiccups, both resolved without data loss: (a) the Pi workbench dropped off the network entirely mid-flash (user diagnosed this correctly as likely session-caused load/disconnection from stacking OpenOCD-stop + SSH + esptool operations back to back, not a red herring — worth remembering, see "Deferred items"; user power-cycled the Pi and everything came back clean, board still on the good build throughout, retest results unaffected since they'd already completed); (b) after that, the flash succeeded and hash-verified, but the board landed back in USB download-mode instead of booting (auto-reset via RTS pin apparently didn't take) — cleared with one more plain Key2 press, confirmed booted clean.
+7. **Reclosed issue #11** with the accurate two-trial summary, explicitly correcting the record versus the first (premature) close.
+8. **Closed issue #2** (the Milestone 3 parent/umbrella issue), since all four child tickets (#8, #9, #10, #11) were now closed. **Milestone 3 is fully complete.**
+9. **Committed and pushed** `NOTES.md`/`docs/OPEN_QUESTIONS.md` changes as `afe0ac2` — full ticket #11 retest writeup (with the superseded original session's record kept, not deleted, and explicitly marked superseded), Q25 update (two clean retest trials reconnected WiFi within ~10s, contradicting the original session's two flaky occurrences — Q25 stays open, this just proves it's intermittent not deterministic), and Q26 (new: should CI auto-push firmware builds to ThingsBoard OTA packages, logged with real open sub-questions — trigger, credentials, version-string mapping, test-vs-release channel — not yet decided).
+10. **Researched ThingsBoard CE vs. paid-tier reporting capability** (WebSearch/WebFetch against thingsboard.io docs) for the new ask in phase 3: confirmed via ThingsBoard's own docs that CSV/XLS widget export and scheduled report generation are **explicitly Professional Edition/Cloud-only features, not available in Community Edition** — their tenant (`iot.mwe-inc.com`) is confirmed CE v4.3.1.3 per `docs/THINGSBOARD_SETUP.md`. CE does support live Table widgets on dashboards (no export button, no scheduling) — that part is not paid-tier-gated.
+11. **Also discovered and told the user**: ThingsBoard's built-in "Version Control" GUI feature (Advanced Features → Version Control) is unrelated to firmware/OTA — it's Git-backed export/import for dashboards, rule chains, devices, etc. only, explicitly does not cover OTA packages. This ruled out a shortcut the user was hoping might exist for the Q26 CI idea.
+12. **Confirmed via code read** (`components/weld_cloud/weld_cloud.h`/`.c`) that all 22 extracted features plus the inference result (`predicted_class`, `label`, `probability_class1`) are already uploaded to ThingsBoard as telemetry per processed file, as part of Milestone 2's existing upload pipeline — this was news to the user ("i didn't realize we were uploading them, we aren't displaying them").
+
+### What failed / remains unverified
+
+- Nothing from ticket #11/Milestone 3 remains unverified — that work is genuinely done and closed.
+- **The new reporting/display ask (phase 3) is entirely unscoped** — mid-grilling-interview, not a plan, not started in code. See "Deferred items" for the exact question state.
+- Whether the Pi workbench's mid-session network drop was actually caused by session-stacked load (OpenOCD stop + SSH + esptool in quick succession) is the user's own working theory, stated directly, not independently confirmed by any diagnostic — worth taking seriously in future sessions (space out Pi-side operations, avoid stacking multiple control-plane calls back to back) but not proven root-caused.
+
+### Exact blocker
+
+None — Milestone 3 work is fully done, committed, and pushed. The only open thread is the new reporting/display ask, which is blocked only on the user's answers to the grilling session's open questions (see below), not on any technical blocker.
+
+### Exact next action
+
+Continue the `/mattpocock-skills:grilling` session (already invoked, `/domain-modeling` context loaded per the `grill-with-docs` wrapper) for the new reporting/display ask. The last round asked two still-open questions the user has not yet answered:
+- **Q1**: Is live browsing (adding a ThingsBoard CE Table widget to the existing dashboard, showing the already-uploaded per-file features/results — no new infrastructure, works today) actually sufficient, or does the user specifically need to get the data *out* of ThingsBoard (download/export, or into another tool)?
+- **Q4**: Expected data volume and retention — roughly how many welds/files per day or week, and how far back should reports need to look? This decides whether a lightweight bridge (e.g., Google Sheets via the ThingsBoard REST API, which has practical row limits) is sufficient or whether a real database-backed layer is needed.
+
+Do not start implementing anything for this ask yet — the grilling session's frontier is not empty (Q1 and Q4 are open, and Q1's answer will likely unblock further downstream questions about what kind of bridge/service to build). Pick up the interview from here, do not restart it.
+
+### Build/test/deploy state
+
+No firmware changes this session beyond the throwaway ticket #11 retest build (never merged, branch deleted). `main` at `afe0ac2` is docs-only relative to `2e9192c`. Last actual firmware build/flash was the retest's rebuild of `main`'s existing `11f4a37`-based source (no source changes, just the temporary deliberate-hang edit which was reverted) — both OTA partitions on the physical device are confirmed running that same good build as of this handoff. Host test suite not re-run this session (no source changes).
+
+### Running state
+
+None. No background processes, dev servers, or open worktrees. The one background Bash flash command from earlier in the session (`bwvl3p5mm`, the original interrupted `ota_1` flash attempt) reported a delayed failure notification after already being superseded by a successful retry — already accounted for, no cleanup needed, nothing to kill.
+
+### Runtime/hardware state
+
+Board is physically on the Pi workbench, SLOT3 (`192.168.1.43`), station IP `192.168.1.61` on the user's real home WiFi (`Other`). Both OTA partitions (`ota_0` @ `0x20000`, `ota_1` @ `0x320000`) confirmed holding the same good build (`11f4a37-dirty`) as of the last check this session — device booted clean, WiFi healthy. The Pi workbench itself had a real, unexplained full-network dropout mid-session (see item 6 above) — resolved by a user-initiated power-cycle, not investigated further; the user's own hypothesis (session-stacked load/disconnection) is plausible but unconfirmed. Same DTR/RTS serial-port-interference and GPIO-unsoldered-Key1 constraints as documented in the prior handoff still apply — never open this board's serial port for passive monitoring; use physical Key1/Key2 presses only; `/api/flash` still 404s on this portal instance, use SCP+SSH+esptool.
+
+### Deferred items / open questions the user didn't fully resolve
+
+- **The new reporting/display ask's grilling session is mid-interview.** Settled so far: (1) the relevant data is the already-uploaded 22 features + predicted_class/label/probability (not raw per-sample signal — that would be separate, larger scope if ever needed); (2) ThingsBoard CE cannot natively export or schedule reports (Professional/Cloud-only), but CE *can* show a live Table widget on the existing dashboard today with zero new infrastructure; (3) paying to upgrade the tenant to a paid tier just for export buttons was recommended against in favor of a lightweight companion layer reading the existing ThingsBoard REST API, but this recommendation has not been explicitly confirmed by the user yet, it's just where the interview was heading. Still open: Q1 (is live browsing enough, or does data need to leave ThingsBoard) and Q4 (volume/retention, which decides Sheets-scale vs. database-scale). Do not assume answers to either.
+- Q25 (`docs/OPEN_QUESTIONS.md`) — WiFi doesn't reliably reconnect after an EN-pin-only reset. Still open, still not root-caused. This session's retest data (2 clean reconnects within ~10s) shows it's intermittent, not deterministic on Key2 alone — doesn't narrow the cause.
+- Q26 (`docs/OPEN_QUESTIONS.md`) — CI/CD auto-push of firmware builds to ThingsBoard OTA packages, replacing the manual upload round-trip. Logged with real open sub-questions (trigger cadence, credential storage, version-string mapping, test-vs-release channel distinction). Not scoped, not started, not committed to.
+- Whether the Pi workbench's network dropout was really caused by session-side load stacking (user's stated theory) — not independently diagnosed. Worth pacing Pi-side operations more conservatively in future sessions as a precaution even without confirmation.
+
+### Project-specific rules already documented (unchanged, just a pointer)
+
+`CLAUDE.md`'s GPIO safety rules, SD-ownership rules, flash-safety rule, and the mandatory explicit-board build command all still apply. This session's real, generalizable lessons (not yet written into `CLAUDE.md`, worth doing eventually): (1) never present a single hardware trial as "verified" without at least one repeat, especially when an earlier trial in the same session was inconclusive/unexplained rather than a clean pass — the user caught this once already and it cost a full reopen/redo cycle; (2) for ThingsBoard OTA package uploads, always let the user do a single create-and-upload UI action rather than pre-creating metadata via MCP first, and never ask them to hand-type a checksum ThingsBoard computes automatically — both now also saved to persistent cross-session memory, not just this file.
+
+### Next-session prompt
+
+Read `docs/PROJECT_STATUS.md` first (this section). Milestone 3 (issues #2, #8, #9, #10, #11) is fully closed, hardware-verified with clean repeatable evidence, committed and pushed at `afe0ac2` — no further action needed there. The live thread is a new, still-unscoped ask: the user wants the weld features/results already being uploaded to ThingsBoard (per-file, since Milestone 2) to be visible/reportable — spreadsheet/database/table-style, possibly exportable. This is being worked via an active `/mattpocock-skills:grilling` session (not yet a plan) that stalled on two open questions: whether live ThingsBoard dashboard browsing is sufficient or the user needs data to leave ThingsBoard entirely, and expected data volume/retention. Resume the grilling interview from exactly those two questions — do not restart it, do not skip to implementation, and do not assume ThingsBoard CE can do more than confirmed here (no native export, no native scheduled reports — Professional/Cloud-only, confirmed directly against thingsboard.io docs this session).
+
+---
 
 **Branch:** `main`
 **Last commit:** `11f4a37` (unchanged this session; see "Files changed" below for uncommitted work)
